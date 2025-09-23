@@ -1,14 +1,20 @@
-
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
+import styles from '../styles/PickDisplay.module.css';
 
 type PickData = {
   location: string;
   product: string;
   debug?: { picklistId?: number | string; itemId?: number | string };
   items?: any[];
+  nextLocations?: string[];
+  done?: boolean;
 };
 
-export default function Home() {
+export default function HomePage() {
+  // Visuele feedback state
+  const [showPickedAnim, setShowPickedAnim] = useState(false);
+  const prevDone = useRef<number>(0);
+  const [currentProduct, setCurrentProduct] = useState<any | null>(null);
   const [data, setData] = useState<PickData>({ location: '', product: '' });
   const [sku, setSku] = useState<string>('');
   const [done, setDone] = useState<number>(0);
@@ -17,133 +23,286 @@ export default function Home() {
   const [progress, setProgress] = useState<number>(0);
   const [nextLocations, setNextLocations] = useState<string[]>([]);
   const [error, setError] = useState<string>('');
+  const [showError, setShowError] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(true);
   const [debug, setDebug] = useState<boolean>(false);
+  const [showNewPicklist, setShowNewPicklist] = useState<boolean>(false);
+  const lastPicklistId = useRef<string>('');
+  const lockedBatchId = useRef<string | null>(null);
+  // Polling interval vast op 1 seconde
+  const pollInterval = 1000;
 
   useEffect(() => {
-    let isNexting = false;
+  let isUnmounted = false;
     const fetchData = async () => {
       try {
-        const batchRes = await fetch('/api/next-batch');
-        if (!batchRes.ok) {
-          const t = await batchRes.json().catch(() => ({}));
-          throw new Error(t?.error || 'Geen open pickbatch gevonden');
+        let batchId = lockedBatchId.current;
+        if (!batchId) {
+          const batchRes = await fetch('/api/next-batch');
+          if (!batchRes.ok) {
+            const t = await batchRes.json().catch(() => ({}));
+            throw new Error(t?.error || 'Geen open pickbatch gevonden');
+          }
+          const batchData = await batchRes.json();
+          batchId = batchData.batchId;
+          lockedBatchId.current = batchId;
         }
-        const { batchId } = await batchRes.json();
         const pickRes = await fetch(`/api/next-pick?batchId=${batchId}`);
+        let pickData: PickData;
         if (!pickRes.ok) {
-          const t = await pickRes.json().catch(() => ({}));
-          throw new Error(t?.error || 'Geen pick data gevonden');
+          // Probeer JSON te parsen, maar alleen als er body is
+          const text = await pickRes.text();
+          let t = {};
+          if (text && text.trim().length > 0) {
+            try { t = JSON.parse(text); } catch {}
+          }
+          throw new Error((t as any)?.error || 'Geen pick data gevonden');
+        } else {
+          // Alleen JSON parsen als er body is
+          const text = await pickRes.text();
+          if (text && text.trim().length > 0) {
+            pickData = JSON.parse(text);
+          } else {
+            pickData = { location: '', product: '' };
+          }
         }
-        const pickData: PickData = await pickRes.json();
-        setData(pickData);
-        setSku(pickData.items?.[0]?.productcode || pickData.items?.[0]?.sku || '');
-        const currentProduct = pickData.items?.find(
-          (item: any) => (item.stocklocation || item.stock_location) === pickData.location
+        if (isUnmounted) return;
+        // Als batch klaar is of niet meer bestaat, unlock en forceer nieuwe batch
+        // --- helpers ---
+        const normLoc = (x: any) => (x ?? "").toString();
+        const pickedOf = (it: any) => Number(it?.amountpicked ?? it?.amount_picked ?? 0);
+        const totalOf  = (it: any) => Number(it?.amount ?? it?.amount_to_pick ?? 0);
+
+        // --- sorteer items op locatie (natuurlijk sorteren) ---
+        const rawItems = Array.isArray(pickData.items) ? pickData.items : [];
+        const sortedItems = rawItems.slice().sort((a, b) =>
+          normLoc(a.stocklocation ?? a.stock_location)
+            .localeCompare(normLoc(b.stocklocation ?? b.stock_location), "nl", { numeric: true, sensitivity: "base" })
         );
-        setDone(
-          currentProduct?.amountpicked ?? currentProduct?.amount_picked ?? 0
+
+        // --- bepaal huidige product: eerste onvoltooide ---
+        const currentProductObj =
+          sortedItems.find((it) => pickedOf(it) < totalOf(it)) ?? null;
+
+        // --- picklist gewisseld? reset UI-flitsers en nextLocations ---
+        const newPicklistId = String(pickData.debug?.picklistId || "");
+        if (newPicklistId && newPicklistId !== lastPicklistId.current) {
+          setShowNewPicklist(true);
+          setTimeout(() => setShowNewPicklist(false), 2000);
+          setNextLocations([]); // reset
+        }
+        setPicklistId(newPicklistId);
+        lastPicklistId.current = newPicklistId;
+
+        // --- als alles klaar is ---
+        if (!currentProductObj) {
+          setCurrentProduct(null);
+          setData({ ...pickData, items: sortedItems, location: "", product: "" });
+          setSku("");
+          setDone(0);
+          setTotal(0);
+          setNextLocations([]);
+          const prog = sortedItems.length
+            ? Math.round(
+                (sortedItems.filter((it) => pickedOf(it) >= totalOf(it)).length / sortedItems.length) * 100
+              )
+            : 0;
+          setProgress(prog);
+          // Fallback bij incomplete/lege batch
+          if (!pickData.items || pickData.items.length === 0) {
+            setError("Batch heeft geen pick-items. Wacht op nieuwe batch in Picqer...");
+          } else {
+            setError("");
+          }
+          lockedBatchId.current = null; // reset zodat nieuwe batch opgehaald wordt
+          // Herlaad direct
+          setTimeout(() => fetchData(), 100);
+          return;
+        }
+
+        // --- UI state voor huidig item (gebruik currentProductObj, NIET state) ---
+        // --- UI state voor huidig item (gebruik currentProductObj, NIET state) ---
+        const locStr = normLoc(currentProductObj.stocklocation ?? currentProductObj.stock_location);
+
+        // zet huidige product + basis UI
+        setCurrentProduct(currentProductObj);
+        setData({
+          ...pickData,
+          items: sortedItems,
+          location: locStr,
+          product:
+            (currentProductObj as any).product ??
+            (currentProductObj as any).name ??
+            (currentProductObj as any).title ??
+            (currentProductObj as any).omschrijving ??
+            (currentProductObj as any).description ??
+            "",
+        });
+        setSku(
+          (currentProductObj as any).productcode ??
+          (currentProductObj as any).sku ??
+          ""
         );
-        setTotal(currentProduct?.amount ?? 0);
-        setPicklistId(String(pickData.debug?.picklistId || ''));
-        const newProgress = pickData.items && pickData.items.length > 0
+        setDone(pickedOf(currentProductObj));
+        // Visuele feedback bij pick-actie: alleen als done verandert
+        if (pickedOf(currentProductObj) !== prevDone.current) {
+          setShowPickedAnim(true);
+          setTimeout(() => setShowPickedAnim(false), 600);
+        }
+        prevDone.current = pickedOf(currentProductObj);
+        setTotal(totalOf(currentProductObj));
+
+        // --- volgende locaties ---
+        // 1) indices van onvoltooide items
+        const incompleteIdxs: number[] = sortedItems
+          .map((it: any, idx: number) => ({ it, idx }))
+          .filter(({ it }) => pickedOf(it) < totalOf(it))
+          .map(({ idx }) => idx);
+
+        // 2) index van huidige in de gesorteerde lijst
+        const curIdx = sortedItems.findIndex((it: any) => it === currentProductObj);
+
+        // 3) neem alleen items NÁ de huidige, map naar locaties, filter leeg/zelfde, dedupe
+        let nextLocs: string[] = [];
+        if (curIdx !== -1) {
+          nextLocs = incompleteIdxs
+            .filter((idx) => idx > curIdx)
+            .map((idx) => normLoc(sortedItems[idx].stocklocation ?? sortedItems[idx].stock_location))
+            .filter((loc) => loc && loc !== locStr);
+
+          const seen = new Set<string>();
+          nextLocs = nextLocs.filter((loc) => (seen.has(loc) ? false : (seen.add(loc), true)));
+        }
+        setNextLocations(nextLocs);
+
+        // --- progress: volledig gepickte items / totaal ---
+        const prog = sortedItems.length
           ? Math.round(
-              (pickData.items.filter((item: any) => item.amountpicked > 0 || item.amount_picked > 0).length /
-                pickData.items.length) *
-                100
+              (sortedItems.filter((it: any) => pickedOf(it) >= totalOf(it)).length / sortedItems.length) * 100
             )
           : 0;
-        setProgress(newProgress);
-        setNextLocations(
-          pickData.items
-            ?.filter((item: any) => !item.picked && (item.amountpicked === 0 || item.amount_picked === 0))
-            .slice(1, 6)
-            .map((item: any) => item.stocklocation || item.stock_location || '') || []
-        );
-        setError('');
-
-        // Automatisch naar volgende picklijst als klaar
-        if (newProgress === 100 && !isNexting) {
-          isNexting = true;
-          setTimeout(() => {
-            fetchData(); // Forceer nieuwe batch ophalen
-            isNexting = false;
-          }, 1000); // 1 seconde delay voor visuele feedback
-        }
+        setProgress(prog);
+        setError("");
       } catch (err: any) {
-        setError(err?.message || String(err));
-        setData({ location: '', product: '' });
-        setSku('');
-        setDone(0);
-        setTotal(0);
-        setPicklistId('');
-        setProgress(0);
-        setNextLocations([]);
+        setError(err.message || 'Onbekende fout');
+        setShowError(true);
       } finally {
-        setLoading(false);
+        if (!isUnmounted) setLoading(false);
       }
     };
-    fetchData();
-    const interval = setInterval(fetchData, 3000);
-    return () => clearInterval(interval);
+  fetchData();
+  const interval = setInterval(fetchData, pollInterval);
+    return () => {
+      isUnmounted = true;
+      clearInterval(interval);
+    };
   }, []);
 
   return (
-    <div className="min-h-screen bg-black text-white flex flex-col">
-      {/* Navigatiebalk */}
-      <nav className="flex items-center justify-between px-8 py-4 bg-gray-900 rounded-b-2xl">
-        <div className="flex gap-8 text-lg font-semibold">
-          <a href="#" className="hover:text-gray-300">Home</a>
-          <a href="#" className="hover:text-gray-300">Station 1</a>
-          <button onClick={() => setDebug(d => !d)} className="hover:text-gray-300">Debug {debug ? '🔛' : '🔘'}</button>
+    <div className={styles.root}>
+      {showNewPicklist && (
+        <div style={{position:'fixed',top:70,left:'50%',transform:'translateX(-50%)',zIndex:1000,background:'#ffd166',color:'#222',fontWeight:700,fontSize:'1.5rem',padding:'0.75rem 2.5rem',borderRadius:'1.5rem',boxShadow:'0 2px 24px #0008',border:'2px solid #ffe7b3'}}>Nieuwe picklijst!</div>
+      )}
+      <header className={styles.topbar}>
+        <div>
+          <nav className={styles.nav}>
+            <a className={styles.navBtn}>Home</a>
+            <a className={styles.navBtn}>Station 1</a>
+            <button onClick={() => setDebug((d: boolean) => !d)} className={styles.debugBtn}>Debug {debug ? '🔛' : '🔘'}</button>
+          </nav>
+          <div className={styles.status}>
+            <span>Picklist: <span>#{picklistId || "—"}</span></span>
+            <span style={{marginLeft: 16}}>Voortgang: <span>{progress}%</span></span>
+            {/* Interval-instelling verwijderd, polling is nu altijd 1 seconde */}
+          </div>
         </div>
-        <div className="flex flex-col items-end">
-          <span className="text-sm text-gray-400">Picklist: <span className="font-bold text-white">{picklistId}</span></span>
-          <span className="text-xs text-gray-400">Voortgang: <span className="font-bold text-green-400">{progress}%</span></span>
-        </div>
-      </nav>
-
-      {/* Main content */}
-      <div className="flex-1 flex flex-col items-center justify-center">
+      </header>
+      <main className={styles.main}>
         {loading ? (
-          <h1 className="text-5xl">Loading...</h1>
+          <h1 style={{fontWeight:900,fontSize:'3rem',textAlign:'center'}}>Loading...</h1>
         ) : error ? (
-          <h1 className="text-3xl text-red-500">{error}</h1>
+          <div style={{textAlign:'center',marginTop:64,color:'#d33',fontSize:'1.5rem',fontWeight:500}}>
+            {error}<br />
+            <span style={{fontSize:'1rem',color:'#aaa'}}>Controleer Picqer of probeer opnieuw...</span>
+          </div>
+        ) : !picklistId || !data.items || data.items.length === 0 ? (
+          <div style={{textAlign:'center',marginTop:64,color:'#888',fontSize:'1.5rem',fontWeight:500}}>
+            Geen actieve batch of pickdata gevonden.<br />
+            <span style={{fontSize:'1rem',color:'#aaa'}}>Wacht op een nieuwe batch in Picqer...</span>
+          </div>
         ) : (
-          <div className="flex flex-col items-center w-full">
-            {/* Locatie */}
-            <h1 className="text-white text-center font-extrabold text-[8vw] mb-4 drop-shadow-lg">{data.location}</h1>
-            {/* Productnaam en SKU */}
-            <div className="flex flex-col items-center mb-6">
-              <span className="text-3xl font-semibold mb-2">{data.product}</span>
-              <span className="text-lg text-gray-400">SKU: <span className="font-mono text-white">{sku}</span></span>
-            </div>
-            {/* Statistieken */}
-            <div className="flex gap-8 mb-8">
-              <div className="bg-gray-800 rounded-xl px-6 py-4 flex flex-col items-center">
-                <span className="text-2xl font-bold text-green-400">{done}</span>
-                <span className="text-sm text-gray-400">Gedaan</span>
+          <div className={styles.card}>
+            <div>
+              {/* Picklist totaal */}
+              <div style={{textAlign:'center',color:'#aaa',fontSize:'1.1rem',marginBottom:'0.5rem'}}>
+                Picklist totaal: {
+                  Array.isArray(data.items)
+                    ? data.items.reduce((sum, it) => sum + (it.amount ?? it.amount_to_pick ?? 0), 0)
+                    : 0
+                } producten
               </div>
-              <div className="bg-gray-800 rounded-xl px-6 py-4 flex flex-col items-center">
-                <span className="text-2xl font-bold text-blue-400">{total}</span>
-                <span className="text-sm text-gray-400">Totaal</span>
+              {/* mega locatie */}
+              <h1 className={styles.location}>
+                <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',display:'block'}}>
+                  {currentProduct ? (currentProduct.stocklocation || currentProduct.stock_location || "—") : "—"}
+                </span>
+              </h1>
+              {/* product en sku */}
+              <div className={styles.meta}>
+                <div className={styles.productName}>{
+                  currentProduct ? (
+                    currentProduct.product ||
+                    currentProduct.name ||
+                    currentProduct.title ||
+                    currentProduct.omschrijving ||
+                    currentProduct.description ||
+                    ''
+                  ) : (data.product || '')
+                }</div>
+                <div className={styles.sku}>SKU: <span style={{fontFamily:'ui-monospace'}}>{sku}</span></div>
               </div>
+              {/* stats */}
+              <div className={styles.stats}>
+                <div>
+                  <div className={styles.statValue} style={showPickedAnim ? {background:'#2ecc40',color:'#fff',borderRadius:12,transition:'all 0.3s'} : {transition:'all 0.3s'}}>
+                    {currentProduct ? (currentProduct.amountpicked ?? currentProduct.amount_picked ?? 0) : done}
+                  </div>
+                  <div className={styles.statLabel}>Gedaan</div>
+                </div>
+                <div>
+                  <div className={styles.statValue}>{currentProduct ? (currentProduct.amount ?? 0) : total}</div>
+                  <div className={styles.statLabel}>Totaal</div>
+                </div>
+              </div>
+              {/* volgende locaties */}
+              {nextLocations && nextLocations.length > 0 && (
+                <div className={styles.nextSection}>
+                  <div className={styles.nextTitle}>Volgende locaties:</div>
+                  <div className={styles.badges}>
+                    {nextLocations.map((loc, i) => (
+                      <span key={i} className={styles.badge}>
+                        {loc}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {/* Debug info */}
+              {debug && (
+                <pre style={{marginTop:32,background:'#121214',borderRadius:16,padding:16,fontSize:12,maxWidth:600,overflowX:'auto',border:'1px solid #2a2a2e'}}>
+                  {JSON.stringify({
+                    data,
+                    firstItem: data.items && data.items.length > 0 ? data.items[0] : null,
+                    currentProduct
+                  }, null, 2)}
+                </pre>
+              )}
             </div>
-            {/* Volgende locaties badges */}
-            <div className="flex gap-2 mt-8 mb-2 flex-wrap justify-center">
-              {nextLocations.map((loc, i) => (
-                <span key={i} className="bg-gray-700 text-white rounded-full px-4 py-2 text-sm font-bold shadow">{loc}</span>
-              ))}
-            </div>
-            {/* Debug info */}
-            {debug && (
-              <pre className="mt-8 bg-gray-900 rounded-xl p-4 text-xs max-w-2xl overflow-x-auto border border-gray-800">
-                {JSON.stringify(data, null, 2)}
-              </pre>
-            )}
           </div>
         )}
-      </div>
+      </main>
     </div>
   );
 }
+
+

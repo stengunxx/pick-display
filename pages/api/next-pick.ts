@@ -1,5 +1,19 @@
 // Next.js API route to securely call Picqer API
-export default async function handler(req, res) {
+async function fetchWithTimeout(resource: string, options: any = {}, timeout: number = 3000): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeout);
+  try {
+    const response = await fetch(resource, { ...options, signal: controller.signal });
+    clearTimeout(id);
+    return response;
+  } catch (e) {
+    clearTimeout(id);
+    throw e;
+  }
+}
+
+export default async function handler(req: any, res: any) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   const headers = {
     Authorization: `Basic ${Buffer.from(process.env.PICQER_API_KEY + ':').toString('base64')}`,
     'Content-Type': 'application/json',
@@ -13,10 +27,11 @@ export default async function handler(req, res) {
 
       let picklistsRes;
       try {
-        picklistsRes = await fetch(`${process.env.PICQER_API_URL}/picklists/batches/${batchId}`, { headers });
+        picklistsRes = await fetchWithTimeout(`${process.env.PICQER_API_URL}/picklists/batches/${batchId}`, { headers }, 3000);
       } catch (err) {
         console.error('Picklists fetch failed:', err);
-        return res.status(502).json({ error: 'Picklists ophalen mislukt (fetch error)', details: String(err) });
+        // Geef een geldige lege response zodat frontend niet blokkeert
+        return res.json({ location: '', product: '', items: [], nextLocations: [], debug: { picklistId: null, itemId: null }, error: 'timeout' });
       }
       if (!picklistsRes.ok) {
         const txt = await picklistsRes.text();
@@ -31,69 +46,61 @@ export default async function handler(req, res) {
       if (!Array.isArray(picklists)) {
         return res.status(500).json({ error: 'API antwoord is geen array', details: picklists });
       }
-    // Picqer kan 'new' of 'open' gebruiken voor open picklists
-    const openPicklist = picklists.find(p => p.status === 'open' || p.status === 'new');
-    if (!openPicklist) {
-      return res.status(404).json({ error: 'Geen open picklists', picklists });
-    }
-
-    if (!openPicklist?.idpicklist) {
-      console.error('Geen geldige openPicklist.idpicklist gevonden:', { batchId, picklists, openPicklist });
-      return res.status(400).json({ error: 'Geen geldige picklist gevonden', batchId, picklists, openPicklist });
-    }
-  // Zorg dat base-URL altijd eindigt op een slash
-  const apiUrl = process.env.PICQER_API_URL || '';
-  const baseUrl = apiUrl.endsWith('/') ? apiUrl : apiUrl + '/';
-    // Probeer eerst /products/ met slash
-    let items;
-    let itemsRes = await fetch(`${baseUrl}picklists/${openPicklist.idpicklist}/products/`, { headers });
-    if (itemsRes.ok) {
-      try { items = await itemsRes.json(); } catch (e) {
-        items = undefined;
+    // Loop over alle open picklists in de batch tot er een te picken item is
+    let found = false;
+    for (const picklist of picklists.filter(p => p.status === 'open' || p.status === 'new')) {
+      if (!picklist?.idpicklist) continue;
+      const apiUrl = process.env.PICQER_API_URL || '';
+      const baseUrl = apiUrl.endsWith('/') ? apiUrl : apiUrl + '/';
+      let items;
+      let itemsRes;
+      try {
+        itemsRes = await fetchWithTimeout(`${baseUrl}picklists/${picklist.idpicklist}/products/`, { headers }, 3000);
+      } catch (err) {
+        itemsRes = { ok: false };
       }
-    }
-    // Fallback: als geen array of 404, haal producten uit picklist zelf
-    if (!Array.isArray(items)) {
-      const picklistUrl = `${baseUrl}picklists/${openPicklist.idpicklist}`;
-      const picklistRes = await fetch(picklistUrl, { headers });
-      if (picklistRes.ok) {
-        let picklistJson;
-        try { picklistJson = await picklistRes.json(); } catch (e) {
-          return res.status(500).json({ error: 'Picklist JSON parse error', details: String(e) });
-        }
-        if (Array.isArray(picklistJson.products)) {
-          items = picklistJson.products;
-        } else {
-          return res.status(500).json({ error: 'Geen producten gevonden in picklist', details: picklistJson });
-        }
-      } else {
-        const txt = await picklistRes.text();
-        return res.status(502).json({ error: 'Picklist ophalen mislukt', status: picklistRes.status, body: txt, url: picklistUrl });
+      if ((itemsRes as Response).ok && typeof (itemsRes as Response).json === 'function') {
+        try { items = await (itemsRes as Response).json(); } catch (e) { items = undefined; }
       }
-    }
-
-      // Toon pas het volgende product als alles van het huidige is gepickt
+      if (!Array.isArray(items)) {
+        const picklistUrl = `${baseUrl}picklists/${picklist.idpicklist}`;
+        let picklistRes;
+        try {
+          picklistRes = await fetchWithTimeout(picklistUrl, { headers }, 3000);
+        } catch (err) {
+          picklistRes = { ok: false };
+        }
+        if ((picklistRes as Response).ok && typeof (picklistRes as Response).json === 'function') {
+          let picklistJson;
+          try { picklistJson = await (picklistRes as Response).json(); } catch (e) { continue; }
+          if (Array.isArray(picklistJson.products)) {
+            items = picklistJson.products;
+          } else { continue; }
+        } else { continue; }
+      }
       const nextItem = items.find((item: any) => {
         const picked = item.amountpicked ?? item.amount_picked ?? 0;
         const total = item.amount ?? 0;
         return !item.picked && picked < total;
       });
-      if (!nextItem) {
-        // Geef fallback response zodat frontend niet crasht
+      if (nextItem) {
+        found = true;
+        // Bereken alle volgende locaties die nog niet gepickt zijn
+        const nextLocations = items
+          .filter((item: any) => !item.picked && ((item.amountpicked ?? item.amount_picked ?? 0) < (item.amount ?? 0)))
+          .map((item: any) => item.stocklocation || item.stock_location || '')
+          .filter((loc: string) => loc && loc !== (nextItem.stocklocation || nextItem.stock_location || ''));
         return res.json({
-          location: '',
-          product: '',
-          debug: { picklistId: openPicklist.idpicklist, itemId: null },
-          items
+          location: nextItem.stocklocation || nextItem.stock_location || '',
+          product: nextItem.name || nextItem.productname || '',
+          debug: { picklistId: picklist.idpicklist, itemId: nextItem.idpicklist_product },
+          items,
+          nextLocations
         });
       }
-
-      return res.json({
-        location: nextItem.stocklocation || nextItem.stock_location || '',
-        product: nextItem.name || nextItem.productname || '',
-        debug: { picklistId: openPicklist.idpicklist, itemId: nextItem.idpicklist_product },
-        items
-      });
+    }
+    // Geen open picklists met te picken items meer: batch is klaar
+    return res.json({ done: true });
   } catch (error) {
     console.error('next-pick error:', error);
     return res.status(500).json({ error: 'Interne serverfout', details: String(error) });

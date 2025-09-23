@@ -1,0 +1,262 @@
+/* Stat-cijfers altijd wit */
+.statValue {
+  color: var(--text) !important;
+}
+
+/* Verwijder paneel achter locatie */
+.card,
+.card::before,
+.card::after {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+  filter: none !important;
+}
+
+/* Verwijder specifieke kleuren op stats */
+.stats > *:first-child .statValue,
+.stats > *:nth-child(2) .statValue {
+  color: var(--text) !important;
+}
+
+/* Verwijder overlays/gradients op main */
+.main::before,
+.main::after {
+  content: none !important;
+  background: transparent !important;
+}
+
+.root {
+  --bg: #0b0b0c;
+  --panel: #121214;
+  --ring: #3a3a42;
+  --text: #f1f1f3;
+  --muted: #9aa0a6;
+  --accent: #ffd166;
+  min-height: 100vh;
+  overflow-x: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, sans-serif;
+  letter-spacing: 0.01em;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  height: 58px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.topbar > div {
+  width: 100%;
+  max-width: 1200px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+}
+
+.nav {
+  display: flex;
+  gap: 12px;
+}
+
+.navBtn {
+  background: #1b1b1f;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  color: var(--text);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+  outline: none;
+}
+
+.navBtn:hover,
+.navBtn:focus {
+  background: #23232a;
+  box-shadow: 0 0 0 2px #2f2f38;
+}
+
+.debugBtn {
+  color: var(--accent);
+  text-shadow: 0 0 6px var(--accent);
+  box-shadow: 0 0 8px 0 var(--accent);
+  background: #1b1b1f;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 10px;
+  color: var(--accent);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+  outline: none;
+  text-shadow: 0 0 6px var(--accent);
+  box-shadow: 0 0 8px 0 var(--accent);
+}
+
+.status {
+  color: var(--muted);
+  font-size: 1rem;
+  text-align: right;
+  font-weight: 500;
+}
+
+.main {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  width: 100%;
+  padding: 12px 16px 0 16px;
+  overflow-x: hidden;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  box-shadow: 0 8px 32px 0 #000a, 0 1.5px 0 0 var(--ring) inset;
+  padding: 8px 32px 24px 32px;
+  max-width: 600px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
+.location {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 900;
+  line-height: 0.9;
+  text-align: center;
+  font-size: clamp(4rem, 12vw, 18rem);
+  color: var(--text);
+  letter-spacing: 0.02em;
+  margin-bottom: 0.5rem;
+}
+
+.meta {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  margin-bottom: 0.5rem;
+}
+
+.productName {
+  font-weight: 600;
+  font-size: clamp(1.25rem, 2vw, 2rem);
+  text-align: center;
+}
+
+.sku {
+  color: var(--muted);
+  font-size: 0.95rem;
+  text-align: center;
+  margin-top: 4px;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  width: 100%;
+  text-align: center;
+}
+
+.statValue {
+  font-weight: 800;
+  font-size: clamp(3rem, 4.5vw, 5rem);
+}
+
+.statLabel {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin-top: 4px;
+}
+
+.nextSection {
+  border-top: 1px solid var(--border);
+  padding-top: 20px;
+  margin-top: 12px;
+  width: 100%;
+}
+
+.nextTitle {
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin-bottom: 8px;
+}
+
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  font-size: 0.85rem;
+}
+
+/* Generic pill/chip style for nav, badges, debug */
+.chip {
+  background: #1b1b1f;
+  border: 1px solid var(--border);
+  color: #e6e6eb;
+  border-radius: 10px;
+  padding: 6px 12px;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.04), 0 0 0 0 rgba(255,209,102,0);
+  transition: .15s;
+  font-size: 0.95rem;
+  font-weight: 500;
+  outline: none;
+  cursor: pointer;
+}
+.chipAccent {
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px rgba(255,209,102,.12), 0 0 20px rgba(255,209,102,.12);
+}
+.chip:hover {
+  background: #222227;
+  border-color: #3a3a42;
+}
+
+.statCard {
+  background: rgba(255,255,255,0.02);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px 0 10px 0;
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.badge {
+  background: #1b1b1f;
+  color: #e6e6eb;
+  border: 1px solid var(--ring);
+  border-radius: 10px;
+  padding: 6px 10px;
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
+.navBtn:focus,
+.debugBtn:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px #2f2f38;
+}

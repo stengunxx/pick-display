@@ -36,11 +36,8 @@ export default async function handler(req, res) {
       const ping = await withTimeout(fetch('https://httpbin.org/get'), 4000, 'httpbin');
       attempts.push({ step: 'httpbin', status: ping.status });
     } catch (e) {
-      return res.status(502).json({
-        step: 'httpbin',
-        error: 'Outbound netwerk faalt of wordt geblokkeerd',
-        detail: String(e),
-      });
+      // Outbound faalt: geef een geldige lege batch terug zodat frontend niet blokkeert
+      return res.json({ batchId: null, error: 'Outbound netwerk faalt', attempts });
     }
 
     // 2) Probeer beide bekende endpoints
@@ -50,13 +47,13 @@ export default async function handler(req, res) {
     for (let i = 0; i < candidates.length; i++) {
       const url = candidates[i];
       try {
-        const r   = await withTimeout(fetch(url, { headers }), 8000, 'GET ' + url);
+  const r = await withTimeout(fetch(url, { headers }), 8000, 'GET ' + url) as Response;
         const txt = await r.text();
         if (!r.ok) {
           attempts.push({ url: url, status: r.status, body: txt.slice(0, 300) });
           continue;
         }
-        let json;
+        let json: any;
         try { json = JSON.parse(txt); }
         catch (e) {
           attempts.push({ url: url, status: r.status, parseError: String(e), body: txt.slice(0, 300) });
@@ -67,7 +64,7 @@ export default async function handler(req, res) {
           attempts.push({ url: url, status: r.status, ok: true, length: json.length, shape: 'array' });
           break;
         }
-        if (Array.isArray(json && json.data)) {
+        if (json && Array.isArray(json.data)) {
           batches = json.data;
           attempts.push({ url: url, status: r.status, ok: true, length: json.data.length, shape: 'data[]' });
           break;
@@ -88,16 +85,14 @@ export default async function handler(req, res) {
       });
     }
 
-    const open = batches.filter(function(b) {
-      return OPEN_STATUSES.indexOf(String(b && b.status || '').toLowerCase()) !== -1;
-    });
+    const open = (batches as any[]).filter((b: any) => OPEN_STATUSES.indexOf(String(b && b.status || '').toLowerCase()) !== -1);
 
     if (open.length === 0) {
       return res.status(404).json({
         step: 'filter-open',
         error: 'Geen open pickbatch bij Picqer',
         attempts: attempts,
-        sample: batches.slice(0, 3),
+        sample: (batches as any[]).slice(0, 3),
         hint: 'Check welke statuswaarden jouw tenant gebruikt; voeg ze eventueel toe aan OPEN_STATUSES.',
       });
     }
@@ -130,7 +125,7 @@ export default async function handler(req, res) {
     console.error('next-batch fatal:', err);
     return res.status(500).json({
       step: 'fatal',
-      error: err && err.message || String(err),
+  error: (err && (err as any).message) || String(err),
       attempts: attempts,
     });
   }
