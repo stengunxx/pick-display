@@ -278,14 +278,14 @@ export default function HomePage() {
               {/* mega locatie */}
                 <h1 className={styles.location} style={{marginTop: 0, marginBottom: '0.2em'}}>
                   <span
-                    className={styles.whiteGlow}
+                    
                     style={{
                       overflow:'hidden',
                       textOverflow:'ellipsis',
                       whiteSpace:'nowrap',
                       display:'block',
                       border: showLocAnim ? '4px solid #ffd166' : '4px solid transparent',
-                      boxShadow: showLocAnim ? '0 0 24px 2px #ffd16688' : 'none',
+                      boxShadow: 'none',
                       transition:'all 0.3s',
                       borderRadius: '1.2em',
                       padding: '0.2em 0.5em',
@@ -297,7 +297,7 @@ export default function HomePage() {
                 </h1>
               {/* product en sku */}
               <div className={styles.meta}>
-                <div className={`${styles.productName} ${styles.whiteGlow}`}>{
+                <div className={styles.productName}>{
                   currentProduct ? (
                     currentProduct.product ||
                     currentProduct.name ||
@@ -312,14 +312,14 @@ export default function HomePage() {
               {/* stats */}
               <div className={styles.stats}>
                 <div>
-                  <div className={`${styles.statValue} ${styles.whiteGlow}`} style={showPickedAnim ? {background:'#2ecc40',color:'#fff',borderRadius:12,transition:'all 0.3s'} : {transition:'all 0.3s'}}>
+                  <div className={styles.statValue} style={showPickedAnim ? {background:'#2ecc40',color:'#fff',borderRadius:12,transition:'all 0.3s'} : {transition:'all 0.3s'}}>
                     {currentProduct ? (currentProduct.amountpicked ?? currentProduct.amount_picked ?? 0) : done}
                   </div>
-                  <div className={`${styles.statLabel} ${styles.whiteGlow}`}>Gedaan</div>
+                  <div className={styles.statLabel}>Gedaan</div>
                 </div>
                 <div>
-                  <div className={`${styles.statValue} ${styles.whiteGlow}`}>{currentProduct ? (currentProduct.amount ?? 0) : total}</div>
-                  <div className={`${styles.statLabel} ${styles.whiteGlow}`}>Totaal</div>
+                  <div className={styles.statValue}>{currentProduct ? (currentProduct.amount ?? 0) : total}</div>
+                  <div className={styles.statLabel}>Totaal</div>
                 </div>
               </div>
               {/* volgende locaties */}
