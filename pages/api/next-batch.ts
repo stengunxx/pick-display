@@ -1,13 +1,20 @@
+import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "./auth/[...nextauth]";
+
 const OPEN_STATUSES = ['open', 'processing', 'inprogress', 'active', 'started'];
 
-function withTimeout(p, ms, label = 'fetch') {
+function withTimeout(p: Promise<any>, ms: number, label = 'fetch') {
   return new Promise((resolve, reject) => {
     const id = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
     p.then((v) => { clearTimeout(id); resolve(v); }, (e) => { clearTimeout(id); reject(e); });
   });
 }
 
-export default async function handler(req, res) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const session = await getServerSession(req, res, authOptions);
+  if (!session) return res.status(401).json({ error: "Unauthorized" });
+
   const baseRaw = process.env.PICQER_API_URL ?? '';
   const base = baseRaw.replace(/\/+$/, ''); // strip trailing slash
   const key  = process.env.PICQER_API_KEY ?? '';
@@ -34,7 +41,7 @@ export default async function handler(req, res) {
     // 1) Outbound check — faalt dit, dan is je runtime/netwerk stuk
     try {
       const ping = await withTimeout(fetch('https://httpbin.org/get'), 4000, 'httpbin');
-      attempts.push({ step: 'httpbin', status: ping.status });
+      attempts.push({ step: 'httpbin', status: (ping as Response).status });
     } catch (e) {
       // Outbound faalt: geef een geldige lege batch terug zodat frontend niet blokkeert
       return res.json({ batchId: null, error: 'Outbound netwerk faalt', attempts });
@@ -47,7 +54,7 @@ export default async function handler(req, res) {
     for (let i = 0; i < candidates.length; i++) {
       const url = candidates[i];
       try {
-  const r = await withTimeout(fetch(url, { headers }), 8000, 'GET ' + url) as Response;
+        const r = await withTimeout(fetch(url, { headers }), 8000, 'GET ' + url) as Response;
         const txt = await r.text();
         if (!r.ok) {
           attempts.push({ url: url, status: r.status, body: txt.slice(0, 300) });
@@ -125,7 +132,7 @@ export default async function handler(req, res) {
     console.error('next-batch fatal:', err);
     return res.status(500).json({
       step: 'fatal',
-  error: (err && (err as any).message) || String(err),
+      error: (err && (err as any).message) || String(err),
       attempts: attempts,
     });
   }

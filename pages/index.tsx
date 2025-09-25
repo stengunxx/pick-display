@@ -1,4 +1,5 @@
 import { useEffect, useState, useRef } from 'react';
+import { signOut } from "next-auth/react";
 import styles from '../styles/PickDisplay.module.css';
 
 type PickData = {
@@ -11,6 +12,20 @@ type PickData = {
 };
 
 export default function HomePage() {
+  // Klok/timer state
+  const [now, setNow] = useState<string>("");
+  useEffect(() => {
+    const updateClock = () => {
+      const d = new Date();
+      setNow(d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}));
+    };
+    updateClock();
+    const timer = setInterval(updateClock, 1000);
+    return () => clearInterval(timer);
+  }, []);
+  // Highlight animatie voor locatie
+  const [showLocAnim, setShowLocAnim] = useState(false);
+  const prevLoc = useRef<string>("");
   // Visuele feedback state
   const [showPickedAnim, setShowPickedAnim] = useState(false);
   const prevDone = useRef<number>(0);
@@ -123,6 +138,12 @@ export default function HomePage() {
         // --- UI state voor huidig item (gebruik currentProductObj, NIET state) ---
         // --- UI state voor huidig item (gebruik currentProductObj, NIET state) ---
         const locStr = normLoc(currentProductObj.stocklocation ?? currentProductObj.stock_location);
+        // Highlight animatie bij locatie-wissel
+        if (locStr !== prevLoc.current) {
+          setShowLocAnim(true);
+          setTimeout(() => setShowLocAnim(false), 700);
+        }
+        prevLoc.current = locStr;
 
         // zet huidige product + basis UI
         setCurrentProduct(currentProductObj);
@@ -204,16 +225,21 @@ export default function HomePage() {
         <div style={{position:'fixed',top:70,left:'50%',transform:'translateX(-50%)',zIndex:1000,background:'#ffd166',color:'#222',fontWeight:700,fontSize:'1.5rem',padding:'0.75rem 2.5rem',borderRadius:'1.5rem',boxShadow:'0 2px 24px #0008',border:'2px solid #ffe7b3'}}>Nieuwe picklijst!</div>
       )}
       <header className={styles.topbar}>
-        <div>
-          <nav className={styles.nav}>
-            <a className={styles.navBtn}>Home</a>
-            <a className={styles.navBtn}>Station 1</a>
-            <button onClick={() => setDebug((d: boolean) => !d)} className={styles.debugBtn}>Debug {debug ? '🔛' : '🔘'}</button>
-          </nav>
-          <div className={styles.status}>
-            <span>Picklist: <span>#{picklistId || "—"}</span></span>
-            <span style={{marginLeft: 16}}>Voortgang: <span>{progress}%</span></span>
-            {/* Interval-instelling verwijderd, polling is nu altijd 1 seconde */}
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',width:'100%'}}>
+          <div style={{display:'flex',alignItems:'center'}}>
+            <nav className={styles.nav}>
+              <a className={styles.navBtn}>Home</a>
+              <a className={styles.navBtn}>Station 1</a>
+              <button onClick={() => setDebug((d: boolean) => !d)} className={styles.debugBtn}>Debug {debug ? '🔛' : '🔘'}</button>
+            </nav>
+          </div>
+          <div style={{display:'flex',alignItems:'center',gap:'0.5em'}}>
+            <div className={styles.status}>
+              <span>Picklist: <span>#{picklistId || "—"}</span></span>
+              <span style={{marginLeft: 16}}>Voortgang: <span>{progress}%</span></span>
+              <span style={{marginLeft: 16,color:'#ffd166',fontWeight:700}}>{now}</span>
+            </div>
+            <button onClick={() => signOut({ callbackUrl: "/login" })} className={styles.navBtn} style={{background:'#222',color:'#ffd166',borderRadius:8,padding:'6px 16px',border:'1px solid #ffd166',fontWeight:600,cursor:'pointer'}}>Uitloggen</button>
           </div>
         </div>
       </header>
@@ -239,17 +265,39 @@ export default function HomePage() {
                   Array.isArray(data.items)
                     ? data.items.reduce((sum, it) => sum + (it.amount ?? it.amount_to_pick ?? 0), 0)
                     : 0
-                } producten
+                } producten<br />
+                Nog te doen: {
+                  Array.isArray(data.items)
+                    ? data.items.filter((it) => (it.amountpicked ?? it.amount_picked ?? 0) < (it.amount ?? it.amount_to_pick ?? 0)).reduce((sum, it) => sum + ((it.amount ?? it.amount_to_pick ?? 0) - (it.amountpicked ?? it.amount_picked ?? 0)), 0)
+                    : 0
+                }
+                <div style={{margin:'12px auto 0 auto',width:'100%',maxWidth:320,height:12,background:'#222',borderRadius:8,overflow:'hidden',boxShadow:'0 1px 8px #0004'}}>
+                  <div style={{height:'100%',background:'#ffd166',width:`${progress}%`,transition:'width 0.4s',borderRadius:8}}></div>
+                </div>
               </div>
               {/* mega locatie */}
-              <h1 className={styles.location}>
-                <span style={{overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',display:'block'}}>
-                  {currentProduct ? (currentProduct.stocklocation || currentProduct.stock_location || "—") : "—"}
-                </span>
-              </h1>
+                <h1 className={styles.location} style={{marginTop: 0, marginBottom: '0.2em'}}>
+                  <span
+                    className={styles.whiteGlow}
+                    style={{
+                      overflow:'hidden',
+                      textOverflow:'ellipsis',
+                      whiteSpace:'nowrap',
+                      display:'block',
+                      border: showLocAnim ? '4px solid #ffd166' : '4px solid transparent',
+                      boxShadow: showLocAnim ? '0 0 24px 2px #ffd16688' : 'none',
+                      transition:'all 0.3s',
+                      borderRadius: '1.2em',
+                      padding: '0.2em 0.5em',
+                      marginTop: 0
+                    }}
+                  >
+                    {currentProduct ? (currentProduct.stocklocation || currentProduct.stock_location || "—") : "—"}
+                  </span>
+                </h1>
               {/* product en sku */}
               <div className={styles.meta}>
-                <div className={styles.productName}>{
+                <div className={`${styles.productName} ${styles.whiteGlow}`}>{
                   currentProduct ? (
                     currentProduct.product ||
                     currentProduct.name ||
@@ -264,14 +312,14 @@ export default function HomePage() {
               {/* stats */}
               <div className={styles.stats}>
                 <div>
-                  <div className={styles.statValue} style={showPickedAnim ? {background:'#2ecc40',color:'#fff',borderRadius:12,transition:'all 0.3s'} : {transition:'all 0.3s'}}>
+                  <div className={`${styles.statValue} ${styles.whiteGlow}`} style={showPickedAnim ? {background:'#2ecc40',color:'#fff',borderRadius:12,transition:'all 0.3s'} : {transition:'all 0.3s'}}>
                     {currentProduct ? (currentProduct.amountpicked ?? currentProduct.amount_picked ?? 0) : done}
                   </div>
-                  <div className={styles.statLabel}>Gedaan</div>
+                  <div className={`${styles.statLabel} ${styles.whiteGlow}`}>Gedaan</div>
                 </div>
                 <div>
-                  <div className={styles.statValue}>{currentProduct ? (currentProduct.amount ?? 0) : total}</div>
-                  <div className={styles.statLabel}>Totaal</div>
+                  <div className={`${styles.statValue} ${styles.whiteGlow}`}>{currentProduct ? (currentProduct.amount ?? 0) : total}</div>
+                  <div className={`${styles.statLabel} ${styles.whiteGlow}`}>Totaal</div>
                 </div>
               </div>
               {/* volgende locaties */}

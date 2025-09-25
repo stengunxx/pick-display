@@ -1,3 +1,7 @@
+import type { NextApiRequest, NextApiResponse } from "next";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "./auth/[...nextauth]";
+
 // Next.js API route to securely call Picqer API
 async function fetchWithTimeout(resource: string, options: any = {}, timeout: number = 3000): Promise<Response> {
   const controller = new AbortController();
@@ -12,7 +16,10 @@ async function fetchWithTimeout(resource: string, options: any = {}, timeout: nu
   }
 }
 
-export default async function handler(req: any, res: any) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  const session = await getServerSession(req, res, authOptions);
+  if (!session) return res.status(401).json({ error: "Unauthorized" });
+
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   const headers = {
     Authorization: `Basic ${Buffer.from(process.env.PICQER_API_KEY + ':').toString('base64')}`,

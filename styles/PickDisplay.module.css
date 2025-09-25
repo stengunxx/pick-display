@@ -1,3 +1,15 @@
+/* Witte glow voor productnaam en stat-waarden */
+.whiteGlow {
+  color: #fff !important;
+  text-shadow: 0 0 12px #fff, 0 0 2px #ffd166;
+  transition: color 0.3s, text-shadow 0.3s;
+}
+/* Accentkleur en glow voor locatie */
+.locationAccent {
+  color: var(--accent);
+  text-shadow: 0 0 12px var(--accent), 0 0 2px #fff;
+  transition: color 0.3s, text-shadow 0.3s;
+}
 /* Stat-cijfers altijd wit */
 .statValue {
   color: var(--text) !important;
