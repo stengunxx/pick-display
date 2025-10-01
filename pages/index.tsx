@@ -324,13 +324,13 @@ export default function HomePage() {
               </div>
               {/* volgende locaties */}
               {nextLocations && nextLocations.length > 0 && (
-                <div className={styles.nextSection}>
-                  <div className={styles.nextTitle}>Volgende locaties:</div>
-                  <div className={styles.badges}>
+                <div className={styles.nextSection} style={{marginTop:'1.5em',textAlign:'center'}}>
+                  <div className={styles.nextTitle} style={{fontSize:'2.5rem',fontWeight:900,marginBottom:'0.5em',letterSpacing:'0.02em'}}>Volgende locaties:</div>
+                  <div style={{display:'flex',justifyContent:'center',gap:'2.5em',flexWrap:'wrap'}}>
                     {nextLocations.map((loc, i) => (
-                      <span key={i} className={styles.badge}>
+                      <div key={loc+String(i)} style={{fontSize:'2.2rem',fontWeight:900,padding:'0.3em 1.2em',borderRadius:'1em',background:'#222',color:'#ffd166',boxShadow:'0 2px 16px #0006',margin:'0.2em 0'}}>
                         {loc}
-                      </span>
+                      </div>
                     ))}
                   </div>
                 </div>
