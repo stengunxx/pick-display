@@ -113,15 +113,7 @@ export default function HomePage() {
 
   function computeViewFromPickData(pickData: any): Omit<BatchView, "batchId"> & { currentProduct: any | null } {
     const rawItems = Array.isArray(pickData.items) ? pickData.items : [];
-    const items = rawItems
-      .slice()
-      .sort((a: any, b: any) =>
-        normLoc(a.stocklocation ?? a.stock_location).localeCompare(
-          normLoc(b.stocklocation ?? b.stock_location),
-          "nl",
-          { numeric: true, sensitivity: "base" }
-        )
-      );
+    const items = Array.isArray(pickData.items) ? pickData.items.slice().sort((a: any, b: any) => collator.compare(locOf(a), locOf(b))) : [];
 
     const current = items.find((it: any) => pickedOf(it) < totalOf(it)) ?? null;
 
@@ -180,109 +172,178 @@ export default function HomePage() {
     }
   }
 
-  // polling
+  const noCache = {
+    cache: "no-store" as const,
+    headers: { "Cache-Control": "no-cache, no-store, must-revalidate", Pragma: "no-cache" }
+  };
+  const collator = new Intl.Collator("nl", { numeric: true, sensitivity: "base" });
+  const locOf = (it: any) => (it?.stocklocation ?? it?.stock_location ?? "").toString();
+  const pollDelayRef = useRef(1000);
+  const turboUntilRef = useRef(0);
+
+  // polling: pump loop met AbortController en no-store
   useEffect(() => {
     let unmounted = false;
+    let ctrl: AbortController | null = null;
+    let timer: any = null;
 
-    const fetchData = async () => {
+    const fetchOnce = async () => {
       try {
-        const batchIds = await refreshBatchIds();
+        // cancel eventueel vorige tick
+        ctrl?.abort();
+        ctrl = new AbortController();
+        const signal = ctrl.signal;
 
-        if (!batchIds || batchIds.length === 0) {
-          emptyTicksRef.current += 1;
-          if (emptyTicksRef.current >= EMPTY_TICKS_GRACE) {
-            emptyTicksRef.current = 0;
-            setBatches([]);
-            setCurrentProduct(null);
-            setData({ location: "", product: "", items: [] });
-            setPicklistId("");
-            setProgress(0);
-            setNextLocations([]);
-          }
+        const bust = `_=${Date.now() % 1e7}`;
+        // 1) batch-ids
+        const j = await fetch(`/api/next-batch?${bust}`, { ...noCache, signal }).then(r => r.json());
+        const ids: (string | number)[] = Array.isArray(j.batchIds) ? j.batchIds : (j.batchId ? [j.batchId] : []);
+
+        if (!ids || ids.length === 0) {
+          setLoading(false);   // loader uitzetten als er geen batches zijn
+          // geen hard reset hier; laat oude UI staan (scheelt flicker + werk)
           return;
         }
 
+        // 2) data per batch
         const settled = await Promise.allSettled(
-          batchIds.map((id) => fetch(`/api/next-pick?batchId=${id}`).then((r) => r.json()))
+          ids.slice(0, 2).map(id =>
+            fetch(`/api/next-pick?batchId=${id}&${bust}`, { ...noCache, signal }).then(r => r.json())
+          )
         );
 
-        const views: BatchView[] = [];
-        const finished = new Set<string | number>();
+        // helpers (lokaal hier zodat V8 ze inline’t)
+        const normLoc  = (x: any) => (x ?? "").toString();
+        const pickedOf = (it: any) => Number(it?.amountpicked ?? it?.amount_picked ?? 0);
+        const totalOf  = (it: any) => Number(it?.amount ?? it?.amount_to_pick ?? 0);
 
-        settled.forEach((res, i) => {
-          if (res.status !== "fulfilled") return;
+        const views: BatchView[] = [];
+
+        for (let i = 0; i < settled.length; i++) {
+          const res = settled[i];
+          if (res.status !== "fulfilled") continue;
           const p = res.value;
 
-          const batchDone =
-            p?.done === true ||
-            (Array.isArray(p?.items) &&
-              p.items.length > 0 &&
-              p.items.every(
-                (it: any) => (it.amountpicked ?? it.amount_picked ?? 0) >= (it.amount ?? it.amount_to_pick ?? 0)
-              ));
+          const items = Array.isArray(p.items)
+            ? p.items.slice().sort((a: any, b: any) => collator.compare(locOf(a), locOf(b)))
+            : [];
 
-          if (batchDone) {
-            finished.add(batchIds[i]);
-            return;
+          // current
+          const cur = items.find((it: any) => pickedOf(it) < totalOf(it)) ?? null;
+
+          // progress
+          const prog = items.length
+            ? Math.round((items.filter((it: any) => pickedOf(it) >= totalOf(it)).length / items.length) * 100)
+            : 0;
+
+          // next locations
+          let nextLocs: string[] = [];
+          if (cur) {
+            const curIdx = items.findIndex((x: any) => x === cur);
+            const curLoc = normLoc(cur.stocklocation ?? cur.stock_location);
+            const seen = new Set<string>();
+            nextLocs = items
+              .map((it: any, idx: number) => ({ it, idx }))
+              .filter(({ it, idx }: { it: any; idx: number }) => idx > curIdx && pickedOf(it) < totalOf(it))
+              .map(({ it }: { it: any }) => normLoc(it.stocklocation ?? it.stock_location))
+              .filter((loc: string) => loc && loc !== curLoc && (seen.has(loc) ? false : (seen.add(loc), true)));
           }
 
-          const view = computeViewFromPickData(p);
-          views.push({ batchId: batchIds[i], ...view });
+          views.push({
+            batchId: ids[i],
+            items: [], // niet nodig voor UI hier
+            currentProduct: cur,
+            product: (cur?.product ?? cur?.name ?? cur?.title ?? cur?.omschrijving ?? cur?.description ?? p.product ?? "") as string,
+            sku: (cur?.productcode ?? cur?.sku ?? "") as string,
+            done: cur ? pickedOf(cur) : 0,
+            total: cur ? totalOf(cur) : 0,
+            progress: prog,
+            nextLocations: nextLocs,
+          });
+        }
+
+        // alleen batches met currentProduct tonen
+        const active = views.filter(v => v.currentProduct);
+
+        // ---- minimal setState: alleen updaten als er echt iets is veranderd ----
+        setBatches(prev => {
+          if (sameBatchList(prev, active)) return prev;
+          return active;
         });
 
-        if (finished.size > 0) {
-          batchIdsRef.current = (batchIdsRef.current || []).filter((id) => !finished.has(id));
-        }
-
-        const active = views.filter((v) => v && v.currentProduct);
-
-        if (active.length > 0) {
-          emptyTicksRef.current = 0;
-          lastGoodViewsRef.current = active;
-          setBatches(active);
-        } else {
-          emptyTicksRef.current += 1;
-          const keep = lastGoodViewsRef.current;
-          if (keep && emptyTicksRef.current < EMPTY_TICKS_GRACE) {
-            setBatches(keep);
-          } else {
-            setBatches([]);
-          }
-        }
-
-        const currentViews = lastGoodViewsRef.current ?? active ?? [];
-        const primary = (currentViews && currentViews[0]) || null;
-
+        const primary = active[0];
         if (primary) {
-          setCurrentProduct(primary.currentProduct);
-          setData({
-            location: primary.currentProduct?.stocklocation ?? primary.currentProduct?.stock_location ?? "",
-            product: primary.product,
-            items: primary.items,
-          });
-          setSku(primary.sku);
-          setDone(primary.done);
-          setTotal(primary.total);
-          setProgress(primary.progress);
-          setNextLocations(primary.nextLocations);
-          setPicklistId(String(primary.batchId ?? ""));
+          updatePrimaryIfChanged(primary);
         }
+        setError(""); // geen grote error UI, alleen intern bijhouden
+        setLoading(false); // loader uit na succesvolle tick
 
-        setError("");
-      } catch (err: any) {
-        setError(err.message || "Onbekende fout");
-      } finally {
-        if (!unmounted) setLoading(false);
+      } catch (e: any) {
+        if (e?.name === "AbortError") return; // genegeerd, nieuwe tick start al
+        setError(e?.message || "");           // UI blijft staan
+        setLoading(false); // loader uit bij error
       }
     };
 
-    fetchData();
-    const interval = setInterval(fetchData, 1000);
-    return () => {
-      unmounted = true;
-      clearInterval(interval);
+    const loop = async () => {
+      if (unmounted) return;
+      await fetchOnce();
+      if (unmounted) return;
+      // turbo zolang een recente wijziging gedetecteerd is
+      const now = Date.now();
+      pollDelayRef.current = now < turboUntilRef.current ? 250 : 1000;
+      timer = setTimeout(loop, pollDelayRef.current);
     };
+
+    loop();
+    return () => { unmounted = true; ctrl?.abort(); if (timer) clearTimeout(timer); };
   }, []);
+
+  // vergelijk twee lijsten met batches heel goedkoop
+  function sameBatchList(a: BatchView[], b: BatchView[]) {
+    if (a === b) return true;
+    if (!a || !b || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+      if (!sameBatch(a[i], b[i])) return false;
+    }
+    return true;
+  }
+  function sameBatch(a: BatchView, b: BatchView) {
+    if (!a || !b) return false;
+    const locA = a.currentProduct?.stocklocation ?? a.currentProduct?.stock_location ?? "";
+    const locB = b.currentProduct?.stocklocation ?? b.currentProduct?.stock_location ?? "";
+    return (
+      a.batchId === b.batchId &&
+      a.sku === b.sku &&
+      a.product === b.product &&
+      a.done === b.done &&
+      a.total === b.total &&
+      a.progress === b.progress &&
+      locA === locB &&
+      a.nextLocations.join("|") === b.nextLocations.join("|")
+    );
+  }
+
+  // update de 'single view' velden alleen als er iets verandert
+  const lastPrimarySigRef = useRef("");
+  function updatePrimaryIfChanged(p: BatchView) {
+    const loc = p.currentProduct?.stocklocation ?? p.currentProduct?.stock_location ?? "";
+    const sig = `${p.batchId}|${p.sku}|${p.product}|${p.done}|${p.total}|${p.progress}|${loc}|${p.nextLocations.join(",")}`;
+    if (lastPrimarySigRef.current !== sig) {
+      // wijziging → turbo 8s
+      turboUntilRef.current = Date.now() + 8000;
+      lastPrimarySigRef.current = sig;
+    }
+    // minimale setState calls
+    setCurrentProduct(p.currentProduct);
+    setData({ location: loc, product: p.product, items: [] }); // items niet nodig voor render
+    setSku(p.sku);
+    setDone(p.done);
+    setTotal(p.total);
+    setProgress(p.progress);
+    setNextLocations(p.nextLocations);
+    setPicklistId(String(p.batchId ?? ""));
+  }
 
   const activeBatches = batches.filter((b) => b && b.currentProduct);
 
