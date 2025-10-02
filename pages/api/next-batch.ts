@@ -113,20 +113,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return ia - ib;
     });
 
-    const first   = open[0];
-    const batchId = Number(first.id || first.idpicklist_batch);
-    if (!Number.isFinite(batchId)) {
-      return res.status(500).json({
-        step: 'extract-id',
-        error: 'Batch ID ontbreekt in response',
-        first: first,
-      });
+    const top = open.slice(0, 2);
+    const ids = top
+      .map(x => Number(x.id || x.idpicklist_batch))
+      .filter(n => Number.isFinite(n));
+
+    if (ids.length === 0) {
+      return res.status(500).json({ step: 'extract-id', error: 'Geen geldige batch IDs', first: open[0] });
     }
 
     return res.status(200).json({
       step: 'ok',
-      batchId: batchId,
-      debug: { chosen_status: first.status, attempts: attempts },
+      batchId: ids[0],
+      batchIds: ids,
+      debug: { chosen_statuses: top.map(t => t.status), attempts: attempts },
     });
   } catch (err) {
     console.error('next-batch fatal:', err);
