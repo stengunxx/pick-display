@@ -1,10 +1,9 @@
-import { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, startTransition } from "react";
 import { signOut } from "next-auth/react";
 import styles from "../styles/PickDisplay.module.css";
 
 type BatchView = {
   batchId: string | number;
-  items: any[];
   currentProduct: any | null;
   product: string;
   sku: string;
@@ -12,6 +11,10 @@ type BatchView = {
   total: number;
   progress: number;
   nextLocations: string[];
+  // optioneel (alleen voor primary / single view):
+  items?: any[];
+  totalProducts?: number;
+  todoProducts?: number;
 };
 
 type PickData = {
@@ -90,7 +93,17 @@ export default function HomePage() {
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(true);
   const [debug, setDebug] = useState<boolean>(false);
-  const [showNewPicklist, setShowNewPicklist] = useState<boolean>(false);
+  const [showNewBatch, setShowNewBatch] = useState(false);
+  const [showNewPicklist, setShowNewPicklist] = useState(false);
+
+  // animations & toast
+  const [showLocAnim, setShowLocAnim] = useState(false);
+  const [showPickedAnim, setShowPickedAnim] = useState(false);
+  const prevLocRef = useRef("");
+  const prevDoneRef = useRef<number | null>(null);
+  const prevBatchIdsRef = useRef("");         // voor “Nieuwe picklijst!”
+  // const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null); // verwijderd, dubbele declaratie
+  const prevPrimaryPicklistIdRef = useRef<string>(""); // voor toast bij picklist-wissel
 
   // anti-flicker (gebruik laatste geldige view een paar ticks)
   const lastGoodViewsRef = useRef<BatchView[] | null>(null);
@@ -199,6 +212,15 @@ export default function HomePage() {
         const j = await fetch(`/api/next-batch?${bust}`, { ...noCache, signal }).then(r => r.json());
         const ids: (string | number)[] = Array.isArray(j.batchIds) ? j.batchIds : (j.batchId ? [j.batchId] : []);
 
+        // batch ids ophalen in fetchOnce
+        const idsStr = ids.join(",");
+        const sig = Array.from(new Set(ids.map(String))).sort().join(",");
+        // detectie nieuwe batch (ids-lijst verandert)
+        if (prevBatchIdsRef.current && prevBatchIdsRef.current !== sig) {
+          pushToast("Nieuwe batch!");
+        }
+        prevBatchIdsRef.current = sig;
+
         if (!ids || ids.length === 0) {
           setLoading(false);   // loader uitzetten als er geen batches zijn
           // geen hard reset hier; laat oude UI staan (scheelt flicker + werk)
@@ -218,7 +240,7 @@ export default function HomePage() {
         const totalOf  = (it: any) => Number(it?.amount ?? it?.amount_to_pick ?? 0);
 
         const views: BatchView[] = [];
-
+        const fullViews: BatchView[] = [];
         for (let i = 0; i < settled.length; i++) {
           const res = settled[i];
           if (res.status !== "fulfilled") continue;
@@ -249,9 +271,15 @@ export default function HomePage() {
               .filter((loc: string) => loc && loc !== curLoc && (seen.has(loc) ? false : (seen.add(loc), true)));
           }
 
-          views.push({
+          const totalProducts = items.reduce((s: number, it: any) => s + (it.amount ?? it.amount_to_pick ?? 0), 0);
+          const todoProducts  = items.reduce((s: number, it: any) => {
+            const a = it.amount ?? it.amount_to_pick ?? 0;
+            const p = it.amountpicked ?? it.amount_picked ?? 0;
+            return s + Math.max(0, a - p);
+          }, 0);
+
+          const common = {
             batchId: ids[i],
-            items: [], // niet nodig voor UI hier
             currentProduct: cur,
             product: (cur?.product ?? cur?.name ?? cur?.title ?? cur?.omschrijving ?? cur?.description ?? p.product ?? "") as string,
             sku: (cur?.productcode ?? cur?.sku ?? "") as string,
@@ -259,21 +287,41 @@ export default function HomePage() {
             total: cur ? totalOf(cur) : 0,
             progress: prog,
             nextLocations: nextLocs,
-          });
+            totalProducts,
+            todoProducts,
+          };
+          views.push(common);
+          fullViews.push({ ...common, items });
         }
 
         // alleen batches met currentProduct tonen
         const active = views.filter(v => v.currentProduct);
 
         // ---- minimal setState: alleen updaten als er echt iets is veranderd ----
-        setBatches(prev => {
-          if (sameBatchList(prev, active)) return prev;
-          return active;
+        // state van de lijst: lichtgewicht
+        startTransition(() => {
+          setBatches(prev => (sameBatchList(prev, active) ? prev : active));
         });
 
-        const primary = active[0];
-        if (primary) {
-          updatePrimaryIfChanged(primary);
+        // primary met items opzoeken (zelfde batchId)
+        const primaryLite = active[0];
+        if (primaryLite) {
+          const primaryFull = fullViews.find(v => v.batchId === primaryLite.batchId) || primaryLite;
+          // picklist-wissel detectie op picklistId
+          const newPicklistId = getPrimaryPicklistId(primaryFull);
+          // detectie nieuwe picklist (primary-wissel)
+          if (debug && prevPrimaryPicklistIdRef.current !== newPicklistId) {
+            console.log("[picklist change]", prevPrimaryPicklistIdRef.current, "→", newPicklistId, { primaryFull });
+          }
+          // Toon toast zodra de zichtbare picklist wisselt
+          if (prevPrimaryPicklistIdRef.current && newPicklistId &&
+              prevPrimaryPicklistIdRef.current !== newPicklistId) {
+            pushToast("Nieuwe picklist!");
+          }
+          prevPrimaryPicklistIdRef.current = newPicklistId;
+          startTransition(() => {
+            updatePrimaryIfChanged(primaryFull); // krijgt items mee
+          });
         }
         setError(""); // geen grote error UI, alleen intern bijhouden
         setLoading(false); // loader uit na succesvolle tick
@@ -291,7 +339,7 @@ export default function HomePage() {
       if (unmounted) return;
       // turbo zolang een recente wijziging gedetecteerd is
       const now = Date.now();
-      pollDelayRef.current = now < turboUntilRef.current ? 250 : 1000;
+      pollDelayRef.current = now < turboUntilRef.current ? 300 : 1000;
       timer = setTimeout(loop, pollDelayRef.current);
     };
 
@@ -334,9 +382,25 @@ export default function HomePage() {
       turboUntilRef.current = Date.now() + 8000;
       lastPrimarySigRef.current = sig;
     }
-    // minimale setState calls
+
+    // locatie veranderd → highlight
+    if (prevLocRef.current && prevLocRef.current !== loc) {
+      setShowLocAnim(true);
+      setTimeout(() => setShowLocAnim(false), 600);
+    }
+    prevLocRef.current = loc;
+
+    // done omhoog → “bump”
+    if (prevDoneRef.current != null && p.done > prevDoneRef.current) {
+      setShowPickedAnim(true);
+      setTimeout(() => setShowPickedAnim(false), 300);
+    }
+    prevDoneRef.current = p.done;
+
+    // Vul items alleen in single-view
+    const isSingleView = batches.filter(b => b && b.currentProduct).length === 1;
     setCurrentProduct(p.currentProduct);
-    setData({ location: loc, product: p.product, items: [] }); // items niet nodig voor render
+    setData({ location: loc, product: p.product, items: isSingleView ? p.items : [] });
     setSku(p.sku);
     setDone(p.done);
     setTotal(p.total);
@@ -347,27 +411,83 @@ export default function HomePage() {
 
   const activeBatches = batches.filter((b) => b && b.currentProduct);
 
+  // totals helper
+  const pickTotals = React.useMemo(() => {
+    const arr = Array.isArray(data.items) ? data.items : [];
+    if (arr.length) {
+      const totalProducts = arr.reduce((s: number, it: any) => s + (it.amount ?? it.amount_to_pick ?? 0), 0);
+      const todoProducts  = arr.reduce((s: number, it: any) => {
+        const a = it.amount ?? it.amount_to_pick ?? 0;
+        const p = it.amountpicked ?? it.amount_picked ?? 0;
+        return s + Math.max(0, a - p);
+      }, 0);
+      return { totalProducts, todoProducts };
+    }
+    // fallback als items even niet meegekomen zijn
+    return { totalProducts: total, todoProducts: Math.max(0, total - done) };
+  }, [data.items, total, done]);
+
+  const debugText = React.useMemo(() => {
+    if (!debug) return "";
+    const first = Array.isArray(data.items) ? data.items[0] : null;
+    return JSON.stringify({ firstItem: first, currentProduct }, null, 2);
+  }, [debug, data.items, currentProduct]);
+
+  type Toast = { id: number; text: string };
+  const toastQRef = useRef<Toast[]>([]);
+  const [activeToast, setActiveToast] = useState<Toast | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function pushToast(text: string) {
+    toastQRef.current.push({ id: Date.now(), text });
+    if (!activeToast) showNextToast();
+  }
+  function showNextToast() {
+    const next = toastQRef.current.shift() || null;
+    setActiveToast(next);
+    if (!next) return;
+    clearTimeout(toastTimerRef.current as any);
+    toastTimerRef.current = setTimeout(showNextToast, 1600);
+  }
+  useEffect(() => () => clearTimeout(toastTimerRef.current as any), []);
+
+  function getPrimaryPicklistId(v: BatchView): string {
+  // Prefer the batch/picklist id from /api/next-batch
+  const fromBatch = v && v.batchId != null ? String(v.batchId) : "";
+  // Fallbacks only if batchId missing
+  const cp = (v && v.currentProduct) || {};
+  const fromItem = String(cp.picklist_id ?? cp.picklistId ?? "");
+  return fromBatch || fromItem || "";
+  }
+
   return (
     <div className={styles.root}>
-      {showNewPicklist && (
+      {activeToast && (
         <div
           style={{
             position: "fixed",
-            top: 70,
-            left: "50%",
-            transform: "translateX(-50%)",
-            zIndex: 1000,
-            background: "#ffd166",
-            color: "#222",
-            fontWeight: 700,
-            fontSize: "1.5rem",
-            padding: "0.75rem 2.5rem",
-            borderRadius: "1.5rem",
-            boxShadow: "0 2px 24px #0008",
-            border: "2px solid #ffe7b3",
+            top: 72,
+            left: 0,
+            right: 0,
+            display: "flex",
+            justifyContent: "center",
+            zIndex: 9999,
+            pointerEvents: "none",
           }}
         >
-          Nieuwe picklijst!
+          <div
+            style={{
+              background: "#ffd166",
+              color: "#222",
+              fontWeight: 800,
+              fontSize: "1.4rem",
+              padding: "0.75rem 2.0rem",
+              borderRadius: "1.25rem",
+              border: "2px solid #ffe7b3",
+              boxShadow: "0 6px 32px rgba(0,0,0,.35)",
+            }}
+          >
+            {activeToast.text}
+          </div>
         </div>
       )}
 
@@ -429,9 +549,9 @@ export default function HomePage() {
           <div className={styles.singleWrap}>
             <div className={styles.card}>
               <div style={{ textAlign: "center", color: "#aaa", fontSize: "1.1rem", marginBottom: "0.5rem" }}>
-                Picklist totaal: {Array.isArray(data.items) ? data.items.reduce((sum, it) => sum + (it.amount ?? it.amount_to_pick ?? 0), 0) : 0} producten
+                Picklist totaal: {pickTotals.totalProducts} producten
                 <br />
-                Nog te doen: {Array.isArray(data.items) ? data.items.filter((it) => (it.amountpicked ?? it.amount_picked ?? 0) < (it.amount ?? it.amount_to_pick ?? 0)).reduce((sum, it) => sum + ((it.amount ?? it.amount_to_pick ?? 0) - (it.amountpicked ?? it.amount_picked ?? 0)), 0) : 0}
+                Nog te doen: {pickTotals.todoProducts}
                 <div
                   style={{
                     margin: "12px auto 0 auto",
@@ -456,22 +576,12 @@ export default function HomePage() {
                 </div>
               </div>
 
-              <h1 className={styles.location} style={{ marginTop: 0, marginBottom: "0.2em" }}>
+              <h1 className={styles.location} style={{ marginTop:0, marginBottom:"0.2em" }}>
                 <span
-                  style={{
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                    whiteSpace: "nowrap",
-                    display: "block",
-                    border: "4px solid transparent",
-                    boxShadow: "none",
-                    transition: "all 0.3s",
-                    borderRadius: "1.2em",
-                    padding: "0.2em 0.5em",
-                    marginTop: 0,
-                  }}
+                  className={`${styles.locBox} ${showLocAnim ? styles.locPulse : ""}`}
+                  style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", display:"block" }}
                 >
-                  {currentProduct ? currentProduct.stocklocation || currentProduct.stock_location || "—" : "—"}
+                  {currentProduct ? (currentProduct.stocklocation || currentProduct.stock_location || "—") : "—"}
                 </span>
               </h1>
 
@@ -493,8 +603,8 @@ export default function HomePage() {
 
               <div className={styles.stats}>
                 <div>
-                  <div className={styles.statValue}>
-                    {currentProduct ? currentProduct.amountpicked ?? currentProduct.amount_picked ?? 0 : done}
+                  <div className={`${styles.statValue} ${showPickedAnim ? styles.bumpFlash : ""}`}>
+                    {currentProduct ? (currentProduct.amountpicked ?? currentProduct.amount_picked ?? 0) : done}
                   </div>
                   <div className={styles.statLabel}>Gedaan</div>
                 </div>
@@ -549,15 +659,7 @@ export default function HomePage() {
                     border: "1px solid #2a2a2e",
                   }}
                 >
-                  {JSON.stringify(
-                    {
-                      data,
-                      firstItem: data.items && (data.items as any[]).length > 0 ? (data.items as any[])[0] : null,
-                      currentProduct,
-                    },
-                    null,
-                    2
-                  )}
+                  {debugText}
                 </pre>
               )}
             </div>
