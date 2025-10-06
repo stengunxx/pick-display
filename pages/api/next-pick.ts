@@ -1,3 +1,4 @@
+import { getProductImageUrlByCode } from "../../lib/picqer";
 // Simpele in-memory cache per batchId (max 1 minuut)
 const pickCache: Record<string, { data: any, ts: number }> = {};
 import type { NextApiRequest, NextApiResponse } from "next";
@@ -105,7 +106,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           } else { continue; }
         } else { continue; }
       }
-      const nextItem = items.find((item: any) => {
+      // Verrijk items met image-url
+      const enriched = await Promise.all(items.map(async (it: any) => {
+        const have =
+          it.image || it.imageUrl || it.image_url || it.product?.image || (Array.isArray(it.images) && it.images[0]);
+        if (have) return it;
+        const code = it.productcode ?? it.sku ?? it.product?.sku ?? "";
+        let image = "";
+        if (code) {
+          try { image = await getProductImageUrlByCode(String(code)); } catch {}
+          if (process.env.NODE_ENV !== "production") {
+            console.log("[img] code:", code, "→", image);
+          }
+        }
+        return { ...it, image };
+      }));
+
+      const nextItem = enriched.find((item: any) => {
         const picked = item.amountpicked ?? item.amount_picked ?? 0;
         const total = item.amount ?? 0;
         return !item.picked && picked < total;
@@ -113,7 +130,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (nextItem) {
         found = true;
         // Bereken alle volgende locaties die nog niet gepickt zijn
-        const nextLocations = items
+        const nextLocations = enriched
           .filter((item: any) => !item.picked && ((item.amountpicked ?? item.amount_picked ?? 0) < (item.amount ?? 0)))
           .map((item: any) => item.stocklocation || item.stock_location || '')
           .filter((loc: string) => loc && loc !== (nextItem.stocklocation || nextItem.stock_location || ''));
@@ -121,7 +138,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           location: nextItem.stocklocation || nextItem.stock_location || '',
           product: nextItem.name || nextItem.productname || '',
           debug: { picklistId: picklist.idpicklist, itemId: nextItem.idpicklist_product },
-          items,
+          items: enriched,
           nextLocations
         };
         cacheSet(String(batchId), responseData);

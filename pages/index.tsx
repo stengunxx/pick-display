@@ -1,3 +1,247 @@
+// ===== image utils: multi-ext fallback & probing cache =====
+const EXT_CANDIDATES = ["jpg", "jpeg", "png", "webp", "gif", "bmp", "avif"] as const;
+const probeCache = new Map<string, boolean>();
+
+function stripQuery(u: string) {
+  if (!u) return u;
+  const i = u.indexOf("?");
+  return i >= 0 ? u.slice(0, i) : u;
+}
+
+function buildSkuFallbacks(sku: string, tpl: string): string[] {
+  if (!sku || !tpl) return [];
+  let urls: string[] = [];
+
+  // {sku} + optioneel {ext}
+  if (tpl.includes("{ext}")) {
+    for (const ext of EXT_CANDIDATES) {
+      urls.push(tpl.replace("{sku}", sku).replace("{ext}", ext));
+    }
+  } else {
+    const expanded = tpl.replace("{sku}", sku);
+    const noQuery = stripQuery(expanded);
+    const hasKnownExt = /\.(jpg|jpeg|png|webp|gif|bmp|avif)$/i.test(noQuery);
+
+    if (hasKnownExt) {
+      const base = expanded.replace(/\.(jpg|jpeg|png|webp|gif|bmp|avif)(\?.*)?$/i, "");
+      for (const ext of EXT_CANDIDATES) urls.push(`${base}.${ext}`);
+    } else {
+      // geen extensie in tpl → probeer "zoals-is" + met alle extensies erachter
+      urls.push(expanded);
+      for (const ext of EXT_CANDIDATES) urls.push(`${expanded}.${ext}`);
+    }
+  }
+  return urls.map(upgradeInsecure);
+}
+
+function getImageCandidates(x: any): string[] {
+  if (!x) return [];
+  const fields: any[] = [
+    // Picqer image direct uit product-object
+    x.image,
+    x.imageUrl,
+    x.image_url,
+    x.imageURL,
+    x.foto,
+    x.afbeelding,
+    x.product_image,
+    x.productImage,
+    x.thumbnail,
+    x.thumb,
+    x.thumbUrl,
+    x.thumb_url,
+    x.productimage,
+    x.product_image_url,
+    x.image_path,
+    x.image_small,
+    x.image_large,
+    // Picqer: images array met echte url
+    Array.isArray(x.images) ? (x.images[0]?.url ?? x.images[0]?.src ?? x.images[0]) : undefined,
+    // Picqer: images als array van strings
+    Array.isArray(x.images) ? x.images[0] : undefined,
+    // objecten
+    x.image?.url,
+    x.image?.src,
+    x.main_image?.url,
+    x.mainImage?.url,
+    x.primary_image?.url,
+    x.primaryImage?.url,
+    x.product?.image,
+    x.product?.imageUrl,
+    x.product?.image_url,
+    x.product?.image?.url,
+    // arrays
+    Array.isArray(x.media)  ? (x.media[0]?.url  ?? x.media[0]?.src  ?? x.media[0])  : undefined,
+    Array.isArray(x.assets) ? (x.assets[0]?.url ?? x.assets[0]) : undefined,
+    Array.isArray(x.gallery)? (x.gallery[0]?.url ?? x.gallery[0]) : undefined,
+  ].filter(Boolean);
+
+  const sku = x?.productcode ?? x?.sku ?? x?.product?.sku ?? "";
+  const tpl = (typeof process !== "undefined" && process.env?.NEXT_PUBLIC_IMAGE_BY_SKU_TEMPLATE) || "";
+
+  const fromData = fields
+    .map(String)
+    .map(upgradeInsecure)
+    .filter(Boolean);
+
+  const fromSku = sku && tpl ? buildSkuFallbacks(String(sku), String(tpl)) : [];
+
+  // dedupe, data-urls eerst
+  const seen = new Set<string>();
+  const all = [...fromData, ...fromSku].filter(u => (seen.has(u) ? false : (seen.add(u), true)));
+  return all;
+}
+
+function probeImage(url: string): Promise<boolean> {
+  if (!url) return Promise.resolve(false);
+  if (probeCache.has(url)) return Promise.resolve(!!probeCache.get(url));
+
+  return new Promise<boolean>((resolve) => {
+    const img = new Image();
+    img.onload = () => { probeCache.set(url, true); resolve(true); };
+    img.onerror = () => { probeCache.set(url, false); resolve(false); };
+    img.src = url;
+  });
+}
+
+async function selectFirstReachable(urls: string[]): Promise<string> {
+  for (const u of urls) {
+    const ok = await probeImage(u);
+    if (ok) return u;
+  }
+  return "";
+}
+function pick<T>(...vals: T[]): T | undefined {
+  return vals.find(Boolean) as any;
+}
+
+function upgradeInsecure(u: string): string {
+  if (!u) return "";
+  if (u.startsWith("//")) return (typeof location !== "undefined" ? location.protocol : "https:") + u;
+  if (typeof location !== "undefined" && location.protocol === "https:" && u.startsWith("http:")) {
+    return u.replace(/^http:/, "https:");
+  }
+  return u;
+}
+
+function getImageUrl(x: any): string {
+  if (!x) return "";
+
+  const candidates: any[] = [
+    // strings
+    x.image, x.imageUrl, x.image_url, x.imageURL,
+    x.foto, x.afbeelding, x.product_image, x.productImage,
+    x.thumbnail, x.thumb, x.thumbUrl, x.thumb_url,
+    x.productimage, x.product_image_url, x.image_path, x.image_small, x.image_large,
+
+    // objecten met url/src
+    x.image?.url, x.image?.src, x.main_image?.url, x.mainImage?.url,
+    x.primary_image?.url, x.primaryImage?.url,
+    x.product?.image, x.product?.imageUrl, x.product?.image_url, x.product?.image?.url,
+
+    // arrays
+    Array.isArray(x.images) ? (x.images[0]?.url ?? x.images[0]?.src ?? x.images[0]) : undefined,
+    Array.isArray(x.media)  ? (x.media[0]?.url  ?? x.media[0]?.src  ?? x.media[0])  : undefined,
+    Array.isArray(x.assets) ? (x.assets[0]?.url ?? x.assets[0]) : undefined,
+    Array.isArray(x.gallery)? (x.gallery[0]?.url ?? x.gallery[0]) : undefined,
+  ];
+    // Debug logging voor image velden
+    console.log("[IMG DEBUG]", { keys: Object.keys(x), resolved: candidates });
+
+  const raw = candidates.find(Boolean);
+  let url = typeof raw === "string" ? raw : "";
+
+  // Optionele SKU fallback via env template
+  if (!url) {
+    const sku = x?.productcode ?? x?.sku ?? x?.product?.sku ?? "";
+    const tpl = (typeof process !== "undefined" && process.env?.NEXT_PUBLIC_IMAGE_BY_SKU_TEMPLATE) || "";
+    if (tpl && sku) {
+      // Debug: toon exacte fallback URL
+      url = tpl.replace("{sku}", String(sku));
+    }
+  }
+
+  return upgradeInsecure(url);
+}
+
+type ProductImageProps = {
+  item: any;
+  max?: number;
+  radius?: number;
+  alt?: string;
+  style?: React.CSSProperties;
+  debugSwitch?: boolean;
+};
+
+function ProductImage({
+  item, max = 200, radius = 12, alt = "Productfoto", style, debugSwitch
+}: ProductImageProps) {
+  const [url, setUrl] = React.useState<string>("");
+  const [tried, setTried] = React.useState<string[]>([]);
+  const candidates = React.useMemo(() => getImageCandidates(item), [item]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setUrl(""); setTried([]);
+      if (!candidates.length) return;
+      setTried(candidates);
+      const found = await selectFirstReachable(candidates);
+      if (!cancelled) setUrl(found);
+    })();
+    return () => { cancelled = true; };
+  }, [candidates.join("|")]);
+
+  if (!url) {
+    if (!debugSwitch) return null; // geen placeholder in productie
+    const sku = item?.productcode ?? item?.sku ?? item?.product?.sku ?? "";
+    return (
+      <div style={{ textAlign: "center", marginBottom: 12 }}>
+        <div
+          style={{
+            width: max, height: max, borderRadius: radius,
+            background: "#111", color: "#555", display: "inline-flex",
+            alignItems: "center", justifyContent: "center",
+            fontWeight: 700, fontSize: 12, border: "1px solid #222", ...style
+          }}
+        >
+          geen foto (debug)
+        </div>
+        <div style={{ marginTop: 6, fontSize: 11, color: "#888" }}>
+          Kandidaten geprobeerd:
+          <div style={{ maxWidth: 560, margin: "6px auto 0", textAlign: "left", fontFamily: "ui-monospace", fontSize: 11 }}>
+            {tried.map((u, i) => <div key={u + i}>{u}</div>)}
+          </div>
+          {sku ? <div style={{ marginTop: 6 }}>SKU: <span style={{ fontFamily: "ui-monospace" }}>{sku}</span></div> : null}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ textAlign: "center", marginBottom: 12 }}>
+      <img
+        key={url}
+        src={url}
+        alt={alt}
+        loading="lazy"
+        decoding="async"
+        referrerPolicy="no-referrer"
+        style={{
+          maxWidth: max, maxHeight: max, objectFit: "contain",
+          borderRadius: radius, boxShadow: "0 2px 16px rgba(0,0,0,.2)",
+          background: "#111", padding: 8, margin: "0 auto",
+          ...style
+        }}
+      />
+      {debugSwitch && (
+        <div style={{ marginTop: 6, fontSize: 11, color: "#888" }}>
+          gekozen url: <span style={{ fontFamily: "ui-monospace" }}>{url}</span>
+        </div>
+      )}
+    </div>
+  );
+}
 // ...existing code...
 // ...existing code...
 import React, { useEffect, useState, useRef, startTransition } from "react";
@@ -33,9 +277,10 @@ type MiniFx = Record<string | number, { locPulse: boolean; bump: boolean; newPic
 
 /* ========== MINI CARD ========== */
 function renderBatchMini(
-  b: BatchView,
-  styles: any,
-  fx?: { locPulse?: boolean; bump?: boolean; newPick?: boolean }
+    b: BatchView,
+    styles: any,
+    fx?: { locPulse?: boolean; bump?: boolean; newPick?: boolean },
+    debugSwitch?: boolean
 ) {
   if (!b) return null;
   const cur = b.currentProduct;
@@ -80,6 +325,8 @@ function renderBatchMini(
             {loc}
           </span>
         </h1>
+        {/* Productfoto mini-kaart */}
+  <ProductImage item={cur} max={72} radius={8} alt={cur?.product || cur?.name || "Productfoto"} debugSwitch={debugSwitch} />
         <div className={styles.metaSplit}>
           <div className={styles.productNameSplit}>{b.product}</div>
           <div className={styles.skuSplit}>
@@ -116,9 +363,24 @@ function renderBatchMini(
 
 /* ========== PAGE ========== */
 export default function HomePage() {
+  const [debug, setDebug] = useState<boolean>(false);
+  // State needed everywhere
+  const [currentProduct, setCurrentProduct] = useState<any | null>(null);
+
   // per-mini picklist-key en timers voor de badge
   const miniPickKeyRef = useRef<Record<string | number, string>>({});
   const miniPickTimerRef = useRef<Record<string | number, number>>({});
+
+  // ...existing code...
+
+  // Debug logging voor image velden
+  React.useEffect(() => {
+    if (debug && currentProduct) {
+      const keys = Object.keys(currentProduct || {});
+      const nested = currentProduct.product ? Object.keys(currentProduct.product) : [];
+      console.log("[IMG DEBUG]", { keys, nested, resolved: getImageUrl(currentProduct), currentProduct });
+    }
+  }, [debug, currentProduct]);
 
   function markMiniNewPick(id: string | number) {
     setMiniFx((curr: MiniFx) => ({ ...curr, [id]: { ...(curr[id] || { locPulse:false, bump:false }), newPick: true } }));
@@ -168,7 +430,6 @@ export default function HomePage() {
   const [batches, setBatches] = useState<BatchView[]>([]);
   const batchIdsRef = useRef<(string | number)[]>([]);
   const [now, setNow] = useState<string>("");
-  const [currentProduct, setCurrentProduct] = useState<any | null>(null);
   const [data, setData] = useState<PickData>({ location: "", product: "" });
   const [sku, setSku] = useState<string>("");
   const [done, setDone] = useState<number>(0);
@@ -178,7 +439,6 @@ export default function HomePage() {
   const [nextLocations, setNextLocations] = useState<string[]>([]);
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(true);
-  const [debug, setDebug] = useState<boolean>(false);
 
   // toast queue
   type Toast = { id: number; text: string };
@@ -605,43 +865,26 @@ export default function HomePage() {
         ) : activeBatches.length >= 2 ? (
           <div className={styles.splitWrap}>
             <section className={styles.splitPaneTop}>
-              {renderBatchMini(activeBatches[0], styles, miniFx[activeBatches[0].batchId])}
+              {renderBatchMini(activeBatches[0], styles, miniFx[activeBatches[0].batchId], debug)}
             </section>
             <section className={styles.splitPaneBottom}>
-              {renderBatchMini(activeBatches[1], styles, miniFx[activeBatches[1].batchId])}
+              {renderBatchMini(activeBatches[1], styles, miniFx[activeBatches[1].batchId], debug)}
             </section>
           </div>
         ) : currentProduct ? (
           <div className={styles.singleWrap}>
             <div className={styles.card}>
-              <div style={{ textAlign: "center", color: "#aaa", fontSize: "1.1rem", marginBottom: "0.5rem" }}>
+              {/* (1) Picklist samenvatting BOVENIN */}
+              <div className={styles.summaryTop}>
                 Picklist totaal: {pickTotals.totalProducts} producten
                 <br />
                 Nog te doen: {pickTotals.todoProducts}
-                <div
-                  style={{
-                    margin: "12px auto 0 auto",
-                    width: "100%",
-                    maxWidth: 320,
-                    height: 12,
-                    background: "#222",
-                    borderRadius: 8,
-                    overflow: "hidden",
-                    boxShadow: "0 1px 8px #0004",
-                  }}
-                >
-                  <div
-                    style={{
-                      height: "100%",
-                      background: "#ffd166",
-                      width: `${progress}%`,
-                      transition: "width 0.4s",
-                      borderRadius: 8,
-                    }}
-                  />
+                <div className={styles.progressBar}>
+                  <div style={{ width: `${progress}%` }} />
                 </div>
               </div>
 
+              {/* (2) Grote locatie */}
               <h1 className={styles.location} style={{ marginTop: 0, marginBottom: "0.2em" }}>
                 <span
                   className={`${styles.locBox} ${showLocAnim ? styles.locPulse : ""}`}
@@ -651,6 +894,16 @@ export default function HomePage() {
                 </span>
               </h1>
 
+              {/* (3) Foto boven de productnaam */}
+              <ProductImage
+                item={currentProduct}
+                max={220}
+                radius={14}
+                alt={currentProduct?.product || currentProduct?.name || "Productfoto"}
+                debugSwitch={debug}
+              />
+
+              {/* (4) Productnaam + SKU */}
               <div className={styles.meta}>
                 <div className={styles.productName}>
                   {currentProduct
@@ -667,6 +920,7 @@ export default function HomePage() {
                 </div>
               </div>
 
+              {/* (5) Stats + (6) Volgende locaties) blijven zoals ze waren */}
               <div className={styles.stats}>
                 <div>
                   <div className={`${styles.statValue} ${showPickedAnim ? styles.bumpFlash : ""}`}>
@@ -683,28 +937,13 @@ export default function HomePage() {
               </div>
 
               {nextLocations && nextLocations.length > 0 && (
-                <div className={styles.nextSection} style={{ marginTop: "1.5em", textAlign: "center" }}>
-                  <div
-                    className={styles.nextTitle}
-                    style={{ fontSize: "2.5rem", fontWeight: 900, marginBottom: "0.5em", letterSpacing: "0.02em" }}
-                  >
+                <div className={styles.nextSection}>
+                  <div className={styles.nextTitle}>
                     Volgende locaties:
                   </div>
-                  <div style={{ display: "flex", justifyContent: "center", gap: "2.5em", flexWrap: "wrap" }}>
+                  <div className={styles.nextGrid}>
                     {nextLocations.map((loc, i) => (
-                      <div
-                        key={loc + String(i)}
-                        style={{
-                          fontSize: "2.2rem",
-                          fontWeight: 900,
-                          padding: "0.3em 1.2em",
-                          borderRadius: "1em",
-                          background: "#222",
-                          color: "#ffd166",
-                          boxShadow: "0 2px 16px #0006",
-                          margin: "0.2em 0",
-                        }}
-                      >
+                      <div key={loc + String(i)} className={styles.badgeBig}>
                         {loc}
                       </div>
                     ))}

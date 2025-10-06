@@ -146,3 +146,75 @@
 /* done bump */
 @keyframes bump { 0%{transform:scale(1)} 40%{transform:scale(1.08)} 100%{transform:scale(1)} }
 .bumpFlash{ animation:bump .22s ease; background:#2ecc40; color:#fff; border-radius:12px; }
+
+/* Compacte header met foto rechts */
+.heroRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: clamp(12px, 2vw, 24px);
+  margin-bottom: clamp(8px, 1.5vh, 16px);
+}
+.heroImg {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  max-height: 18vh;
+}
+
+/* Samenvatting bovenin (boven de locatie) */
+.summaryTop{
+  text-align:center;
+  color: var(--muted);
+  font-size: 1.05rem;
+  margin-bottom: .4rem;
+}
+.progressBar{
+  margin: 12px auto 0 auto;
+  width: min(320px, 90vw);
+  height: 12px;
+  background: #222;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 1px 8px #0004;
+}
+.progressBar > div{
+  height: 100%;
+  background: var(--accent);
+  transition: width .4s ease;
+  border-radius: 8px;
+}
+
+/* Volgende locaties: responsief */
+.nextSection{ border-top:1px solid var(--border); padding-top:1rem; margin-top:.6rem; width:100%; }
+.nextTitle{
+  text-align:center; font-weight:900; color:var(--text);
+  font-size:clamp(1.6rem,3vw,2.6rem); margin-bottom:.5rem;
+}
+.nextGrid{
+  display:flex; flex-wrap:wrap; justify-content:center;
+  gap: clamp(10px, 2vw, 24px);
+  max-width: min(1200px, 95vw);
+  margin: 0 auto;
+}
+.badgeBig{
+  font-size: clamp(1.1rem, 2.6vw, 2.1rem);
+  font-weight: 900;
+  padding: .35em 1.1em;
+  border-radius: 1em;
+  background: #222;
+  color: #ffd166;
+  box-shadow: 0 2px 16px #0006;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Responsive: onder ~1200px stackt de hero */
+@media (max-width: 1200px) {
+  .heroRow {
+    flex-direction: column;
+    align-items: center;
+  }
+  .heroImg { order: 2; }
+}
