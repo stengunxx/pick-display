@@ -246,6 +246,11 @@ export default function HomePage() {
   const [batches, setBatches] = useState<BatchView[]>([]);
   const [miniFx, setMiniFx] = useState<MiniFx>({});
 
+  // fetching + empty-state stabilisatie
+  const [loading, setLoading] = useState(true);
+  const emptyTicksRef = useRef(0);
+  const EMPTY_TICKS_TO_CLEAR = 3; // pas na 3 opeenvolgende lege polls schoonvegen
+
   // misc
   const [error, setError] = useState('');
   const prevLocRef = useRef('');
@@ -265,22 +270,30 @@ export default function HomePage() {
     let timer: any = null;
 
     async function fetchOnce() {
+      let loaderTimer: any;
       try {
+        // zet loading alleen aan als het lang duurt (minder flikkeren)
+        loaderTimer = setTimeout(() => setLoading(true), 450);
+
         const bust = `_=${Date.now() % 1e7}`;
         const j = await fetch(`/api/next-batch?${bust}`, { cache: 'no-store' }).then(r => r.json());
         const ids: (string | number)[] = Array.isArray(j.batchIds) ? j.batchIds : (j.batchId ? [j.batchId] : []);
+
+        // Als er geen batches zijn → telt als "leeg"
         if (!ids || ids.length === 0) {
-          if (!unmounted) {
-            setBatches([]);
-            setCurrentProduct(null);
-            setDataItems([]);
-            setPicklistId('');
-            setProgress(0);
+          emptyTicksRef.current += 1;
+          if (emptyTicksRef.current >= EMPTY_TICKS_TO_CLEAR) {
+            if (!unmounted) {
+              setBatches([]);
+              setCurrentProduct(null);
+              setDataItems([]);
+              setPicklistId('');
+              setProgress(0);
+            }
           }
           return;
         }
 
-        // pak max 2 voor split
         const settled = await Promise.allSettled(
           ids.slice(0, 2).map(id => fetch(`/api/next-pick?batchId=${id}&${bust}`, { cache: 'no-store' }).then(r => r.json()))
         );
@@ -335,22 +348,24 @@ export default function HomePage() {
         if (unmounted) return;
 
         const active = views.filter(v => v.currentProduct);
-        setBatches(active);
-
-        // header / single state
         const primary = active[0] || null;
-        setPicklistId(String(primary?.batchId ?? ids[0] ?? ''));
-        setProgress(primary?.progress ?? 0);
 
-        if (primary?.currentProduct) {
+        if (active.length > 0 && primary?.currentProduct) {
+          // ✅ geldige data → reset lege-teller en update alles
+          emptyTicksRef.current = 0;
+
+          setBatches(active);
+          setPicklistId(String(primary.batchId));
+          setProgress(primary.progress);
+
           const loc = primary.currentProduct.stocklocation ?? primary.currentProduct.stock_location ?? '';
           if (prevLocRef.current !== '' && prevLocRef.current !== loc) {
-            // optional location pulse – class handled by CSS, here we could toggle state if you want animation
+            /* optional: set loc pulse state */
           }
           prevLocRef.current = loc;
 
           if (prevDoneRef.current != null && primary.done > prevDoneRef.current) {
-            // optional bump animation
+            /* optional: bump anim */
           }
           prevDoneRef.current = primary.done;
 
@@ -360,49 +375,48 @@ export default function HomePage() {
           setDone(primary.done);
           setTotal(primary.total);
           setNextLocations(primary.nextLocations);
-        } else {
-          setCurrentProduct(null);
-          setDataItems([]);
-          setSku('');
-          setDone(0);
-          setTotal(0);
-          setNextLocations([]);
-        }
 
-        // mini effects (loc/done change)
-        setMiniFx(prev => {
-          const next: MiniFx = { ...prev };
-          for (const v of active) {
-            const id = v.batchId;
-            const loc = String(v.currentProduct?.stocklocation ?? v.currentProduct?.stock_location ?? '');
-            const d = Number(v.done ?? 0);
-            const prevKey = `${(prev as any)[id]?.__loc ?? ''}|${(prev as any)[id]?.__done ?? -1}`;
-            const curKey  = `${loc}|${d}`;
-            const locChanged = prevKey.split('|')[0] !== loc;
-            const doneIncreased = Number(prevKey.split('|')[1]) < d;
-            next[id] = { locPulse: !!locChanged, bump: !!doneIncreased };
-            (next as any)[id].__loc = loc;
-            (next as any)[id].__done = d;
-            setTimeout(() => {
-              setMiniFx(curr => ({ ...curr, [id]: { ...(curr[id] || {}), locPulse: false, bump: false } }));
-            }, locChanged ? 600 : 300);
-          }
-          // cleanup missing ids
-          Object.keys(next).forEach(k => {
-            if (!active.some(v => String(v.batchId) === String(k))) delete (next as any)[k];
+          // mini effects (loc/done change)
+          setMiniFx(prev => {
+            const next: MiniFx = { ...prev };
+            for (const v of active) {
+              const id = v.batchId;
+              const locNow = String(v.currentProduct?.stocklocation ?? v.currentProduct?.stock_location ?? '');
+              const d = Number(v.done ?? 0);
+              const prevKey = `${(prev as any)[id]?.__loc ?? ''}|${(prev as any)[id]?.__done ?? -1}`;
+              const locChanged = prevKey.split('|')[0] !== locNow;
+              const doneIncreased = Number(prevKey.split('|')[1]) < d;
+              next[id] = { locPulse: !!locChanged, bump: !!doneIncreased };
+              (next as any)[id].__loc = locNow;
+              (next as any)[id].__done = d;
+              setTimeout(() => {
+                setMiniFx(curr => ({ ...curr, [id]: { ...(curr[id] || {}), locPulse: false, bump: false } }));
+              }, locChanged ? 600 : 300);
+            }
+            Object.keys(next).forEach(k => {
+              if (!active.some(v => String(v.batchId) === String(k))) delete (next as any)[k];
+            });
+            return next;
           });
-          return next;
-        });
+        } else {
+          // ⚠️ (tijdelijk) leeg → NIET meteen leeg scherm tonen
+          emptyTicksRef.current += 1;
+          // batches niet overschrijven; toon laatste goede staat
+          // NIET meer leegmaken: dashboard blijft laatste geldige batch tonen
+        }
 
         setError('');
       } catch (e: any) {
         if (!unmounted) setError(e?.message || 'Er ging iets mis.');
+      } finally {
+        clearTimeout(loaderTimer);
+        setLoading(false);
       }
     }
 
     const loop = async () => {
       await fetchOnce();
-      if (!unmounted) timer = setTimeout(loop, 800); // ~1s
+  if (!unmounted) timer = setTimeout(loop, 300); // sneller: ~0.3s
     };
 
     loop();
@@ -418,6 +432,8 @@ export default function HomePage() {
     const todoProducts  = items.reduce((s, it) => s + Math.max(0, totalOf(it) - pickedOf(it)), 0);
     return { totalProducts, todoProducts };
   }, [dataItems, total, done]);
+
+
 
   return (
     <div className={styles.root}>
@@ -499,14 +515,54 @@ export default function HomePage() {
                   {currentProduct ? (currentProduct.stocklocation || currentProduct.stock_location || '—') : '—'}
                 </span>
               </h1>
-              {/* ...rest van je single view ... */}
+
+              {/* Foto */}
+              <ProductImage
+                item={currentProduct}
+                max={200}
+                radius={14}
+                alt={currentProduct?.product || currentProduct?.name || 'Productfoto'}
+                debugSwitch={debug}
+              />
+
+              {/* Naam + SKU */}
+              <div className={styles.meta}>
+                <div className={styles.productName}>
+                  {currentProduct?.product || currentProduct?.name || currentProduct?.title || currentProduct?.omschrijving || currentProduct?.description || ''}
+                </div>
+                <div className={styles.sku}>
+                  SKU: <span style={{ fontFamily: 'ui-monospace' }}>{sku}</span>
+                </div>
+              </div>
+
+              {/* Stats */}
+              <div className={styles.stats}>
+                <div>
+                  <div className={styles.statValue}>{done}</div>
+                  <div className={styles.statLabel}>Gedaan</div>
+                </div>
+                <div>
+                  <div className={styles.statValue}>{total}</div>
+                  <div className={styles.statLabel}>Totaal</div>
+                </div>
+              </div>
+
+              {/* Volgende locaties */}
+              {nextLocations && nextLocations.length > 0 && (
+                <div className={styles.nextSection}>
+                  <div className={styles.nextTitle}>Volgende locaties:</div>
+                  <div className={(styles as any).nextScroll}>
+                    <div className={styles.nextGrid}>
+                      {nextLocations.map((loc, i) => (
+                        <div key={loc + String(i)} className={styles.badgeBig}>
+                          {loc}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
-          </div>
-        ) : (!batches.length && !currentProduct) ? (
-          <div style={{ textAlign: 'center', marginTop: 64, color: '#888', fontSize: '1.5rem', fontWeight: 500 }}>
-            Geen actieve batch of pickdata gevonden.
-            <br />
-            <span style={{ fontSize: '1rem', color: '#aaa' }}>Wacht op een nieuwe batch in Picqer...</span>
           </div>
         ) : null}
       </main>
