@@ -1,3 +1,5 @@
+// Simpele in-memory cache per batchId (max 1 minuut)
+const pickCache: Record<string, { data: any, ts: number }> = {};
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "./auth/[...nextauth]";
@@ -5,7 +7,7 @@ import { authOptions } from "./auth/[...nextauth]";
 // Next.js API route to securely call Picqer API
 async function fetchWithTimeout(resource: string, options: any = {}, timeout: number = 3000): Promise<Response> {
   const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeout);
+  const id = setTimeout(() => controller.abort(), 1000);
   try {
     const response = await fetch(resource, { ...options, signal: controller.signal });
     clearTimeout(id);
@@ -17,6 +19,18 @@ async function fetchWithTimeout(resource: string, options: any = {}, timeout: nu
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  // Helper: cache opslaan
+  function cacheSet(batchId: string, data: any) {
+    pickCache[batchId] = { data, ts: Date.now() };
+  }
+  // Helper: cache ophalen
+  function cacheGet(batchId: string) {
+    const entry = pickCache[batchId];
+    if (entry && Date.now() - entry.ts < 60000 && entry.data && Object.keys(entry.data).length > 0) {
+      return entry.data;
+    }
+    return null;
+  }
   const session = await getServerSession(req, res, authOptions);
   if (!session) return res.status(401).json({ error: "Unauthorized" });
 
@@ -34,10 +48,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
       let picklistsRes;
       try {
-        picklistsRes = await fetchWithTimeout(`${process.env.PICQER_API_URL}/picklists/batches/${batchId}`, { headers }, 3000);
+        picklistsRes = await fetchWithTimeout(`${process.env.PICQER_API_URL}/picklists/batches/${batchId}`, { headers }, 1000);
       } catch (err) {
         console.error('Picklists fetch failed:', err);
-        // Geef een geldige lege response zodat frontend niet blokkeert
+        // Geef cached data terug als die er is
+        const cached = cacheGet(String(batchId));
+        if (cached) {
+          cached.error = 'timeout';
+          return res.json(cached);
+        }
+        // Anders geldige lege response
         return res.json({ location: '', product: '', items: [], nextLocations: [], debug: { picklistId: null, itemId: null }, error: 'timeout' });
       }
       if (!picklistsRes.ok) {
@@ -62,7 +82,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       let items;
       let itemsRes;
       try {
-        itemsRes = await fetchWithTimeout(`${baseUrl}picklists/${picklist.idpicklist}/products/`, { headers }, 3000);
+        itemsRes = await fetchWithTimeout(`${baseUrl}picklists/${picklist.idpicklist}/products/`, { headers }, 1000);
       } catch (err) {
         itemsRes = { ok: false };
       }
@@ -73,7 +93,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const picklistUrl = `${baseUrl}picklists/${picklist.idpicklist}`;
         let picklistRes;
         try {
-          picklistRes = await fetchWithTimeout(picklistUrl, { headers }, 3000);
+          picklistRes = await fetchWithTimeout(picklistUrl, { headers }, 1000);
         } catch (err) {
           picklistRes = { ok: false };
         }
@@ -97,17 +117,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           .filter((item: any) => !item.picked && ((item.amountpicked ?? item.amount_picked ?? 0) < (item.amount ?? 0)))
           .map((item: any) => item.stocklocation || item.stock_location || '')
           .filter((loc: string) => loc && loc !== (nextItem.stocklocation || nextItem.stock_location || ''));
-        return res.json({
+        const responseData = {
           location: nextItem.stocklocation || nextItem.stock_location || '',
           product: nextItem.name || nextItem.productname || '',
           debug: { picklistId: picklist.idpicklist, itemId: nextItem.idpicklist_product },
           items,
           nextLocations
-        });
+        };
+        cacheSet(String(batchId), responseData);
+        return res.json(responseData);
       }
     }
     // Geen open picklists met te picken items meer: batch is klaar
-    return res.json({ done: true });
+  const doneData = { done: true };
+  cacheSet(String(batchId), doneData);
+  return res.json(doneData);
   } catch (error) {
     console.error('next-pick error:', error);
     return res.status(500).json({ error: 'Interne serverfout', details: String(error) });

@@ -1,7 +1,9 @@
+// ...existing code...
 import React, { useEffect, useState, useRef, startTransition } from "react";
 import { signOut } from "next-auth/react";
 import styles from "../styles/PickDisplay.module.css";
 
+/* ========== TYPES ========== */
 type BatchView = {
   batchId: string | number;
   currentProduct: any | null;
@@ -26,7 +28,14 @@ type PickData = {
   done?: boolean;
 };
 
-function renderBatchMini(b: BatchView, styles: any) {
+type MiniFx = Record<string | number, { locPulse: boolean; bump: boolean }>;
+
+/* ========== MINI CARD ========== */
+function renderBatchMini(
+  b: BatchView,
+  styles: any,
+  fx?: { locPulse?: boolean; bump?: boolean }
+) {
   if (!b) return null;
   const cur = b.currentProduct;
   const loc = cur ? cur.stocklocation || cur.stock_location || "—" : "—";
@@ -40,7 +49,10 @@ function renderBatchMini(b: BatchView, styles: any) {
           <i style={{ width: `${Math.max(0, Math.min(100, b.progress || 0))}%` }} />
         </div>
         <h1 className={styles.locationSplit}>
-          <span style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <span
+            className={`${fx?.locPulse ? styles.locPulse : ""}`}
+            style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          >
             {loc}
           </span>
         </h1>
@@ -52,7 +64,7 @@ function renderBatchMini(b: BatchView, styles: any) {
         </div>
         <div className={styles.statsSplit}>
           <div>
-            <div className={styles.statValue}>{b.done}</div>
+            <div className={`${styles.statValue} ${fx?.bump ? styles.bumpFlash : ""}`}>{b.done}</div>
             <div className={styles.statLabel}>Gedaan</div>
           </div>
           <div>
@@ -77,7 +89,10 @@ function renderBatchMini(b: BatchView, styles: any) {
   );
 }
 
+/* ========== PAGE ========== */
 export default function HomePage() {
+  // Detectie picklist-wissel (ook binnen dezelfde batch)
+  const prevPicklistIdRef = useRef<string | number | null>(null);
   // ----- UI state -----
   const [batches, setBatches] = useState<BatchView[]>([]);
   const batchIdsRef = useRef<(string | number)[]>([]);
@@ -93,22 +108,43 @@ export default function HomePage() {
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState<boolean>(true);
   const [debug, setDebug] = useState<boolean>(false);
-  const [showNewBatch, setShowNewBatch] = useState(false);
-  const [showNewPicklist, setShowNewPicklist] = useState(false);
 
-  // animations & toast
+  // toast queue
+  type Toast = { id: number; text: string };
+  const toastQRef = useRef<Toast[]>([]);
+  const [activeToast, setActiveToast] = useState<Toast | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  function pushToast(text: string) {
+    toastQRef.current.push({ id: Date.now(), text });
+    if (!activeToast) showNextToast();
+  }
+  function showNextToast() {
+    const next = toastQRef.current.shift() || null;
+    setActiveToast(next);
+    if (!next) return;
+    clearTimeout(toastTimerRef.current as any);
+    toastTimerRef.current = setTimeout(showNextToast, 1600);
+  }
+  useEffect(() => () => clearTimeout(toastTimerRef.current as any), []);
+
+  // animations (single view)
   const [showLocAnim, setShowLocAnim] = useState(false);
   const [showPickedAnim, setShowPickedAnim] = useState(false);
   const prevLocRef = useRef("");
   const prevDoneRef = useRef<number | null>(null);
-  const prevBatchIdsRef = useRef("");         // voor “Nieuwe picklijst!”
-  // const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null); // verwijderd, dubbele declaratie
-  const prevPrimaryPicklistIdRef = useRef<string>(""); // voor toast bij picklist-wissel
 
-  // anti-flicker (gebruik laatste geldige view een paar ticks)
-  const lastGoodViewsRef = useRef<BatchView[] | null>(null);
-  const emptyTicksRef = useRef(0);
-  const EMPTY_TICKS_GRACE = 3;
+  // split-view animatiestate
+  const [miniFx, setMiniFx] = useState<MiniFx>({});
+  const miniPrevRef = useRef<Record<string | number, { loc: string; done: number }>>({});
+
+  // picklist-wissel toast (primary)
+  const prevBatchIdsRef = useRef(""); // detectie nieuwe batch-set
+  const prevPrimaryKeyRef = useRef<string | null>(null);
+  const initPrimaryRef = useRef(false);
+
+  // performance / polling
+  const pollDelayRef = useRef(1000);
+  const turboUntilRef = useRef(0);
 
   // klokje
   useEffect(() => {
@@ -120,81 +156,14 @@ export default function HomePage() {
   }, []);
 
   // helpers
-  const normLoc = (x: any) => (x ?? "").toString();
-  const pickedOf = (it: any) => Number(it?.amountpicked ?? it?.amount_picked ?? 0);
-  const totalOf = (it: any) => Number(it?.amount ?? it?.amount_to_pick ?? 0);
-
-  function computeViewFromPickData(pickData: any): Omit<BatchView, "batchId"> & { currentProduct: any | null } {
-    const rawItems = Array.isArray(pickData.items) ? pickData.items : [];
-    const items = Array.isArray(pickData.items) ? pickData.items.slice().sort((a: any, b: any) => collator.compare(locOf(a), locOf(b))) : [];
-
-    const current = items.find((it: any) => pickedOf(it) < totalOf(it)) ?? null;
-
-    const prog = items.length
-      ? Math.round((items.filter((it: any) => pickedOf(it) >= totalOf(it)).length / items.length) * 100)
-      : 0;
-
-    let nextLocs: string[] = [];
-    if (current) {
-      const curIdx = items.findIndex((x: any) => x === current);
-      const curLoc = normLoc(current.stocklocation ?? current.stock_location);
-      const seen = new Set<string>();
-      nextLocs = items
-        .map((it: any, idx: number) => ({ it, idx }))
-        .filter(({ it, idx }: any) => idx > curIdx && pickedOf(it) < totalOf(it))
-        .map(({ it }: any) => normLoc(it.stocklocation ?? it.stock_location))
-        .filter((loc: string) => loc && loc !== curLoc && (seen.has(loc) ? false : (seen.add(loc), true)));
-    }
-
-    return {
-      items,
-      currentProduct: current,
-      product:
-        (current?.product ??
-          current?.name ??
-          current?.title ??
-          current?.omschrijving ??
-          current?.description ??
-          pickData.product ??
-          "") as string,
-      sku: (current?.productcode ?? current?.sku ?? "") as string,
-      done: current ? pickedOf(current) : 0,
-      total: current ? totalOf(current) : 0,
-      progress: prog,
-      nextLocations: nextLocs,
-    };
-  }
-
-  async function refreshBatchIds(): Promise<(string | number)[]> {
-    try {
-      const r = await fetch("/api/next-batch");
-      const j = await r.json();
-      const ids: (string | number)[] = Array.isArray(j.batchIds) ? j.batchIds : j.batchId ? [j.batchId] : [];
-
-      const prev = (batchIdsRef.current || []).join(",");
-      const next = ids.join(",");
-      if (prev && next && prev !== next) {
-        setShowNewPicklist(true);
-        setTimeout(() => setShowNewPicklist(false), 1200);
-      }
-
-      batchIdsRef.current = ids.slice(0, 2); // max 2 batches
-      return batchIdsRef.current;
-    } catch {
-      return batchIdsRef.current || [];
-    }
-  }
-
   const noCache = {
     cache: "no-store" as const,
     headers: { "Cache-Control": "no-cache, no-store, must-revalidate", Pragma: "no-cache" }
   };
   const collator = new Intl.Collator("nl", { numeric: true, sensitivity: "base" });
   const locOf = (it: any) => (it?.stocklocation ?? it?.stock_location ?? "").toString();
-  const pollDelayRef = useRef(1000);
-  const turboUntilRef = useRef(0);
 
-  // polling: pump loop met AbortController en no-store
+  // polling
   useEffect(() => {
     let unmounted = false;
     let ctrl: AbortController | null = null;
@@ -202,42 +171,49 @@ export default function HomePage() {
 
     const fetchOnce = async () => {
       try {
-        // cancel eventueel vorige tick
         ctrl?.abort();
         ctrl = new AbortController();
         const signal = ctrl.signal;
-
         const bust = `_=${Date.now() % 1e7}`;
-        // 1) batch-ids
-        const j = await fetch(`/api/next-batch?${bust}`, { ...noCache, signal }).then(r => r.json());
-        const ids: (string | number)[] = Array.isArray(j.batchIds) ? j.batchIds : (j.batchId ? [j.batchId] : []);
 
-        // batch ids ophalen in fetchOnce
-        const idsStr = ids.join(",");
-        const sig = Array.from(new Set(ids.map(String))).sort().join(",");
-        // detectie nieuwe batch (ids-lijst verandert)
-        if (prevBatchIdsRef.current && prevBatchIdsRef.current !== sig) {
+        // Loader timer: als het langer dan 500ms duurt, zet loading aan
+        let loaderTimeout = setTimeout(() => {
+          if (!loading) setLoading(true);
+        }, 500);
+
+        // 1) batch-ids en 2) batch-data tegelijk ophalen
+        const batchPromise = fetch(`/api/next-batch?${bust}`, { ...noCache, signal }).then(r => r.json());
+        const pickPromise = batchPromise.then(j => {
+          const ids: (string | number)[] = Array.isArray(j.batchIds) ? j.batchIds : (j.batchId ? [j.batchId] : []);
+          if (!ids || ids.length === 0) return { ids: [], settled: [] };
+          return Promise.allSettled(
+            ids.slice(0, 2).map(id =>
+              fetch(`/api/next-pick?batchId=${id}&${bust}`, { ...noCache, signal }).then(r => r.json())
+            )
+          ).then(settled => ({ ids, settled }));
+        });
+
+        // Wacht op beide tegelijk
+        const [j, pickResult] = await Promise.all([batchPromise, pickPromise]);
+  clearTimeout(loaderTimeout);
+  if (loading) setLoading(false);
+
+        const ids: (string | number)[] = Array.isArray(j.batchIds) ? j.batchIds : (j.batchId ? [j.batchId] : []);
+        const sigIds = Array.from(new Set(ids.map(String))).sort().join(",");
+
+        // Nieuwe batch-set (bijv. batch toegevoegd/verwijderd)
+        if (prevBatchIdsRef.current && prevBatchIdsRef.current !== sigIds) {
           pushToast("Nieuwe batch!");
         }
-        prevBatchIdsRef.current = sig;
+        prevBatchIdsRef.current = sigIds;
 
-        if (!ids || ids.length === 0) {
-          setLoading(false);   // loader uitzetten als er geen batches zijn
-          // geen hard reset hier; laat oude UI staan (scheelt flicker + werk)
+        if (!ids || ids.length === 0 || !pickResult || !Array.isArray(pickResult.settled)) {
+          setLoading(false);
           return;
         }
 
-        // 2) data per batch
-        const settled = await Promise.allSettled(
-          ids.slice(0, 2).map(id =>
-            fetch(`/api/next-pick?batchId=${id}&${bust}`, { ...noCache, signal }).then(r => r.json())
-          )
-        );
-
-        // helpers (lokaal hier zodat V8 ze inline’t)
-        const normLoc  = (x: any) => (x ?? "").toString();
-        const pickedOf = (it: any) => Number(it?.amountpicked ?? it?.amount_picked ?? 0);
-        const totalOf  = (it: any) => Number(it?.amount ?? it?.amount_to_pick ?? 0);
+        // 2) data per batch (parallel)
+        const settled = pickResult.settled;
 
         const views: BatchView[] = [];
         const fullViews: BatchView[] = [];
@@ -250,24 +226,24 @@ export default function HomePage() {
             ? p.items.slice().sort((a: any, b: any) => collator.compare(locOf(a), locOf(b)))
             : [];
 
-          // current
+          const pickedOf = (it: any) => Number(it?.amountpicked ?? it?.amount_picked ?? 0);
+          const totalOf  = (it: any) => Number(it?.amount ?? it?.amount_to_pick ?? 0);
+
           const cur = items.find((it: any) => pickedOf(it) < totalOf(it)) ?? null;
 
-          // progress
           const prog = items.length
             ? Math.round((items.filter((it: any) => pickedOf(it) >= totalOf(it)).length / items.length) * 100)
             : 0;
 
-          // next locations
           let nextLocs: string[] = [];
           if (cur) {
             const curIdx = items.findIndex((x: any) => x === cur);
-            const curLoc = normLoc(cur.stocklocation ?? cur.stock_location);
+            const curLoc = locOf(cur);
             const seen = new Set<string>();
             nextLocs = items
               .map((it: any, idx: number) => ({ it, idx }))
               .filter(({ it, idx }: { it: any; idx: number }) => idx > curIdx && pickedOf(it) < totalOf(it))
-              .map(({ it }: { it: any }) => normLoc(it.stocklocation ?? it.stock_location))
+              .map(({ it }: { it: any }) => locOf(it))
               .filter((loc: string) => loc && loc !== curLoc && (seen.has(loc) ? false : (seen.add(loc), true)));
           }
 
@@ -278,7 +254,7 @@ export default function HomePage() {
             return s + Math.max(0, a - p);
           }, 0);
 
-          const common = {
+          const common: BatchView = {
             batchId: ids[i],
             currentProduct: cur,
             product: (cur?.product ?? cur?.name ?? cur?.title ?? cur?.omschrijving ?? cur?.description ?? p.product ?? "") as string,
@@ -294,42 +270,76 @@ export default function HomePage() {
           fullViews.push({ ...common, items });
         }
 
-        // alleen batches met currentProduct tonen
         const active = views.filter(v => v.currentProduct);
 
-        // ---- minimal setState: alleen updaten als er echt iets is veranderd ----
-        // state van de lijst: lichtgewicht
+        // split-view animaties (loc-wissel / done↑) per batch
+        setMiniFx(prevFx => {
+          const nextFx: MiniFx = { ...prevFx };
+          for (const v of active) {
+            const id = v.batchId;
+            const loc = String(v.currentProduct?.stocklocation ?? v.currentProduct?.stock_location ?? "");
+            const done = Number(v.done ?? 0);
+            const prev = miniPrevRef.current[id] || { loc, done };
+            const locChanged = prev.loc && prev.loc !== loc;
+            const doneIncreased = prev.done != null && done > prev.done;
+
+            if (locChanged || doneIncreased) {
+              nextFx[id] = { locPulse: !!locChanged, bump: !!doneIncreased };
+              setTimeout(() => {
+                setMiniFx(curr => ({ ...curr, [id]: { locPulse: false, bump: false } }));
+              }, locChanged ? 600 : 300);
+            }
+            miniPrevRef.current[id] = { loc, done };
+          }
+          // opruimen voor verdwenen batches
+          Object.keys(nextFx).forEach(k => {
+            if (!active.some(v => String(v.batchId) === String(k))) delete nextFx[k as any];
+          });
+          return nextFx;
+        });
+
+        // lijst-state
         startTransition(() => {
           setBatches(prev => (sameBatchList(prev, active) ? prev : active));
         });
 
-        // primary met items opzoeken (zelfde batchId)
-        const primaryLite = active[0];
+        // primary + picklist-wissel-toast
+        const primaryLite = active[0] || null;
         if (primaryLite) {
-          const primaryFull = fullViews.find(v => v.batchId === primaryLite.batchId) || primaryLite;
-          // picklist-wissel detectie op picklistId
-          const newPicklistId = getPrimaryPicklistId(primaryFull);
-          // detectie nieuwe picklist (primary-wissel)
-          if (debug && prevPrimaryPicklistIdRef.current !== newPicklistId) {
-            console.log("[picklist change]", prevPrimaryPicklistIdRef.current, "→", newPicklistId, { primaryFull });
+          const newPrimaryKey = String(primaryLite.batchId ?? "");
+          if (debug && prevPrimaryKeyRef.current !== newPrimaryKey) {
+            console.log("[primary picklist change]", prevPrimaryKeyRef.current, "→", newPrimaryKey, { primaryLite });
           }
-          // Toon toast zodra de zichtbare picklist wisselt
-          if (prevPrimaryPicklistIdRef.current && newPicklistId &&
-              prevPrimaryPicklistIdRef.current !== newPicklistId) {
+          if (initPrimaryRef.current && prevPrimaryKeyRef.current && newPrimaryKey &&
+              prevPrimaryKeyRef.current !== newPrimaryKey) {
             pushToast("Nieuwe picklist!");
           }
-          prevPrimaryPicklistIdRef.current = newPicklistId;
-          startTransition(() => {
-            updatePrimaryIfChanged(primaryFull); // krijgt items mee
-          });
-        }
-        setError(""); // geen grote error UI, alleen intern bijhouden
-        setLoading(false); // loader uit na succesvolle tick
+          prevPrimaryKeyRef.current = newPrimaryKey;
+          initPrimaryRef.current = true;
 
+          const primaryFull = fullViews.find(v => v.batchId === primaryLite.batchId) || primaryLite;
+          // Detecteer picklist-wissel
+          const currentPicklistId =
+            primaryFull?.currentProduct?.picklistId ??
+            primaryFull?.currentProduct?.picklist_id ??
+            null;
+          if (
+            prevPicklistIdRef.current &&
+            currentPicklistId &&
+            prevPicklistIdRef.current !== currentPicklistId
+          ) {
+            pushToast("Nieuwe picklist!");
+          }
+          prevPicklistIdRef.current = currentPicklistId;
+          startTransition(() => updatePrimaryIfChanged(primaryFull));
+        }
+
+        setError("");
+        setLoading(false);
       } catch (e: any) {
-        if (e?.name === "AbortError") return; // genegeerd, nieuwe tick start al
-        setError(e?.message || "");           // UI blijft staan
-        setLoading(false); // loader uit bij error
+        if (e?.name === "AbortError") return;
+        setError(e?.message || "");
+        setLoading(false);
       }
     };
 
@@ -337,15 +347,14 @@ export default function HomePage() {
       if (unmounted) return;
       await fetchOnce();
       if (unmounted) return;
-      // turbo zolang een recente wijziging gedetecteerd is
       const now = Date.now();
-      pollDelayRef.current = now < turboUntilRef.current ? 300 : 1000;
+  pollDelayRef.current = 300;
       timer = setTimeout(loop, pollDelayRef.current);
     };
 
     loop();
     return () => { unmounted = true; ctrl?.abort(); if (timer) clearTimeout(timer); };
-  }, []);
+  }, [debug]);
 
   // vergelijk twee lijsten met batches heel goedkoop
   function sameBatchList(a: BatchView[], b: BatchView[]) {
@@ -378,26 +387,22 @@ export default function HomePage() {
     const loc = p.currentProduct?.stocklocation ?? p.currentProduct?.stock_location ?? "";
     const sig = `${p.batchId}|${p.sku}|${p.product}|${p.done}|${p.total}|${p.progress}|${loc}|${p.nextLocations.join(",")}`;
     if (lastPrimarySigRef.current !== sig) {
-      // wijziging → turbo 8s
       turboUntilRef.current = Date.now() + 8000;
       lastPrimarySigRef.current = sig;
     }
 
-    // locatie veranderd → highlight
     if (prevLocRef.current && prevLocRef.current !== loc) {
       setShowLocAnim(true);
       setTimeout(() => setShowLocAnim(false), 600);
     }
     prevLocRef.current = loc;
 
-    // done omhoog → “bump”
     if (prevDoneRef.current != null && p.done > prevDoneRef.current) {
       setShowPickedAnim(true);
       setTimeout(() => setShowPickedAnim(false), 300);
     }
     prevDoneRef.current = p.done;
 
-    // Vul items alleen in single-view
     const isSingleView = batches.filter(b => b && b.currentProduct).length === 1;
     setCurrentProduct(p.currentProduct);
     setData({ location: loc, product: p.product, items: isSingleView ? p.items : [] });
@@ -423,7 +428,6 @@ export default function HomePage() {
       }, 0);
       return { totalProducts, todoProducts };
     }
-    // fallback als items even niet meegekomen zijn
     return { totalProducts: total, todoProducts: Math.max(0, total - done) };
   }, [data.items, total, done]);
 
@@ -432,32 +436,6 @@ export default function HomePage() {
     const first = Array.isArray(data.items) ? data.items[0] : null;
     return JSON.stringify({ firstItem: first, currentProduct }, null, 2);
   }, [debug, data.items, currentProduct]);
-
-  type Toast = { id: number; text: string };
-  const toastQRef = useRef<Toast[]>([]);
-  const [activeToast, setActiveToast] = useState<Toast | null>(null);
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  function pushToast(text: string) {
-    toastQRef.current.push({ id: Date.now(), text });
-    if (!activeToast) showNextToast();
-  }
-  function showNextToast() {
-    const next = toastQRef.current.shift() || null;
-    setActiveToast(next);
-    if (!next) return;
-    clearTimeout(toastTimerRef.current as any);
-    toastTimerRef.current = setTimeout(showNextToast, 1600);
-  }
-  useEffect(() => () => clearTimeout(toastTimerRef.current as any), []);
-
-  function getPrimaryPicklistId(v: BatchView): string {
-  // Prefer the batch/picklist id from /api/next-batch
-  const fromBatch = v && v.batchId != null ? String(v.batchId) : "";
-  // Fallbacks only if batchId missing
-  const cp = (v && v.currentProduct) || {};
-  const fromItem = String(cp.picklist_id ?? cp.picklistId ?? "");
-  return fromBatch || fromItem || "";
-  }
 
   return (
     <div className={styles.root}>
@@ -532,9 +510,7 @@ export default function HomePage() {
       </header>
 
       <main className={styles.main}>
-        {loading ? (
-          <h1 style={{ fontWeight: 900, fontSize: "3rem", textAlign: "center" }}>Loading...</h1>
-        ) : error ? (
+        {error ? (
           <div style={{ textAlign: "center", marginTop: 64, color: "#d33", fontSize: "1.5rem", fontWeight: 500 }}>
             {error}
             <br />
@@ -542,8 +518,12 @@ export default function HomePage() {
           </div>
         ) : activeBatches.length >= 2 ? (
           <div className={styles.splitWrap}>
-            <section className={styles.splitPaneTop}>{renderBatchMini(activeBatches[0], styles)}</section>
-            <section className={styles.splitPaneBottom}>{renderBatchMini(activeBatches[1], styles)}</section>
+            <section className={styles.splitPaneTop}>
+              {renderBatchMini(activeBatches[0], styles, miniFx[activeBatches[0].batchId])}
+            </section>
+            <section className={styles.splitPaneBottom}>
+              {renderBatchMini(activeBatches[1], styles, miniFx[activeBatches[1].batchId])}
+            </section>
           </div>
         ) : currentProduct ? (
           <div className={styles.singleWrap}>
@@ -576,10 +556,10 @@ export default function HomePage() {
                 </div>
               </div>
 
-              <h1 className={styles.location} style={{ marginTop:0, marginBottom:"0.2em" }}>
+              <h1 className={styles.location} style={{ marginTop: 0, marginBottom: "0.2em" }}>
                 <span
                   className={`${styles.locBox} ${showLocAnim ? styles.locPulse : ""}`}
-                  style={{ overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", display:"block" }}
+                  style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}
                 >
                   {currentProduct ? (currentProduct.stocklocation || currentProduct.stock_location || "—") : "—"}
                 </span>
@@ -675,6 +655,3 @@ export default function HomePage() {
     </div>
   );
 }
-
-
-
