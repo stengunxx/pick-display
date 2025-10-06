@@ -159,7 +159,7 @@ const locOf = (it: any) => (it?.stocklocation ?? it?.stock_location ?? '').toStr
 const pickedOf = (it: any) => Number(it?.amountpicked ?? it?.amount_picked ?? 0);
 const totalOf  = (it: any) => Number(it?.amount ?? it?.amount_to_pick ?? 0);
 
-/* ===================== MINI PANEL ===================== */
+/* ===================== MINI PANEL (split) ===================== */
 
 function RenderBatchMini(
   { b, fx, debug }: { b: BatchView; fx?: { locPulse?: boolean; bump?: boolean; newPick?: boolean }; debug?: boolean }
@@ -227,9 +227,10 @@ function RenderBatchMini(
 /* ===================== PAGE ===================== */
 
 export default function HomePage() {
+
   const [debug, setDebug] = useState(false);
 
-  // header state
+  // header
   const [now, setNow] = useState('');
   const [picklistId, setPicklistId] = useState<string>('');
   const [progress, setProgress] = useState(0);
@@ -242,19 +243,38 @@ export default function HomePage() {
   const [total, setTotal] = useState(0);
   const [nextLocations, setNextLocations] = useState<string[]>([]);
 
-  // split state
+  // split view
   const [batches, setBatches] = useState<BatchView[]>([]);
-  const [miniFx, setMiniFx] = useState<MiniFx>({});
+  const [miniFx, setMiniFx] = useState<MiniFx>({}); // alleen voor split
+
+  // single-mode animaties (los van split)
+  const [singleFx, setSingleFx] = useState<{locPulse:boolean; bump:boolean}>({locPulse:false, bump:false});
+
+  // toasts
+  const [toast, setToast] = useState<{text:string}|null>(null);
+  const toastTimerRef = useRef<any>(null);
+  const showToast = (text: string) => {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    setToast({ text });
+    toastTimerRef.current = setTimeout(() => setToast(null), 2200);
+  };
 
   // fetching + empty-state stabilisatie
   const [loading, setLoading] = useState(true);
   const emptyTicksRef = useRef(0);
-  const EMPTY_TICKS_TO_CLEAR = 3; // pas na 3 opeenvolgende lege polls schoonvegen
+  const EMPTY_TICKS_TO_CLEAR = 3;
 
-  // misc
-  const [error, setError] = useState('');
+  // error state (fixes error references)
+  const [error, setError] = useState<string>('');
+
+  // misc refs voor detectie
   const prevLocRef = useRef('');
-  const prevDoneRef = useRef<number | null>(null);
+  const prevDoneRef = useRef<number>(-1);
+  const prevSkuRef = useRef<string>('');
+  // Ref to track previous picklistId for toast logic
+  const prevPicklistIdRef = useRef<string | number>('');
+  // Ref om vorige productcodes/skus van batch te onthouden
+  const prevBatchSkusRef = useRef<string[]>([]);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -272,23 +292,18 @@ export default function HomePage() {
     async function fetchOnce() {
       let loaderTimer: any;
       try {
-        // zet loading alleen aan als het lang duurt (minder flikkeren)
         loaderTimer = setTimeout(() => setLoading(true), 450);
 
         const bust = `_=${Date.now() % 1e7}`;
         const j = await fetch(`/api/next-batch?${bust}`, { cache: 'no-store' }).then(r => r.json());
         const ids: (string | number)[] = Array.isArray(j.batchIds) ? j.batchIds : (j.batchId ? [j.batchId] : []);
 
-        // Als er geen batches zijn → telt als "leeg"
         if (!ids || ids.length === 0) {
           emptyTicksRef.current += 1;
           if (emptyTicksRef.current >= EMPTY_TICKS_TO_CLEAR) {
             if (!unmounted) {
               setBatches([]);
-              setCurrentProduct(null);
-              setDataItems([]);
-              setPicklistId('');
-              setProgress(0);
+              // laat single view staan tot echt 3 lege polls → UX rustiger
             }
           }
           return;
@@ -351,32 +366,10 @@ export default function HomePage() {
         const primary = active[0] || null;
 
         if (active.length > 0 && primary?.currentProduct) {
-          // ✅ geldige data → reset lege-teller en update alles
           emptyTicksRef.current = 0;
 
+          // SPLIT state (mini-effecten)
           setBatches(active);
-          setPicklistId(String(primary.batchId));
-          setProgress(primary.progress);
-
-          const loc = primary.currentProduct.stocklocation ?? primary.currentProduct.stock_location ?? '';
-          if (prevLocRef.current !== '' && prevLocRef.current !== loc) {
-            /* optional: set loc pulse state */
-          }
-          prevLocRef.current = loc;
-
-          if (prevDoneRef.current != null && primary.done > prevDoneRef.current) {
-            /* optional: bump anim */
-          }
-          prevDoneRef.current = primary.done;
-
-          setCurrentProduct(primary.currentProduct);
-          setDataItems(Array.isArray(primary.items) ? primary.items : []);
-          setSku(primary.sku);
-          setDone(primary.done);
-          setTotal(primary.total);
-          setNextLocations(primary.nextLocations);
-
-          // mini effects (loc/done change)
           setMiniFx(prev => {
             const next: MiniFx = { ...prev };
             for (const v of active) {
@@ -398,29 +391,74 @@ export default function HomePage() {
             });
             return next;
           });
+
+          // HEADER
+          setPicklistId(String(primary.batchId));
+          setProgress(primary.progress);
+
+          // SINGLE view detecties + animaties/toasts
+          const loc = primary.currentProduct.stocklocation ?? primary.currentProduct.stock_location ?? '';
+          const doneVal = primary.done;
+          const skuVal  = primary.sku || '';
+          const batchIdVal = String(primary.batchId);
+
+          // locatie wissel → zachte glow (geen toast)
+          if (prevLocRef.current && prevLocRef.current !== loc) {
+            setSingleFx(s => ({ ...s, locPulse: true }));
+            setTimeout(() => setSingleFx(s => ({ ...s, locPulse: false })), 520);
+          }
+          prevLocRef.current = loc;
+
+          // done toename → kleine pop animatie + groen
+          if (prevDoneRef.current >= 0 && doneVal > prevDoneRef.current) {
+            setSingleFx(s => ({ ...s, bump: true }));
+            setTimeout(() => setSingleFx(s => ({ ...s, bump: false })), 240);
+          }
+          prevDoneRef.current = doneVal;
+
+          // batchId verandering → nieuwe picklijst toast
+          const currentSkus = Array.isArray(primary.items)
+            ? primary.items.map(it => String(it.productcode ?? it.sku ?? ''))
+            : [];
+          const prevSkus = prevBatchSkusRef.current;
+          const isNewPicklist = prevSkus.length > 0 && currentSkus.length > 0 && (
+            prevSkus.join('|') !== currentSkus.join('|')
+          );
+          if (isNewPicklist) {
+            showToast('Nieuwe picklijst');
+          }
+          prevBatchSkusRef.current = currentSkus;
+
+          prevSkuRef.current = skuVal;
+
+          // update single data
+          setCurrentProduct(primary.currentProduct);
+          setDataItems(Array.isArray(primary.items) ? primary.items : []);
+          setSku(primary.sku);
+          setDone(primary.done);
+          setTotal(primary.total);
+          setNextLocations(primary.nextLocations);
         } else {
-          // ⚠️ (tijdelijk) leeg → NIET meteen leeg scherm tonen
+          // tijdelijk leeg → behoud laatste goede view
           emptyTicksRef.current += 1;
-          // batches niet overschrijven; toon laatste goede staat
-          // NIET meer leegmaken: dashboard blijft laatste geldige batch tonen
         }
 
         setError('');
       } catch (e: any) {
-        if (!unmounted) setError(e?.message || 'Er ging iets mis.');
+        setError(e?.message || 'Er ging iets mis.');
       } finally {
-        clearTimeout(loaderTimer);
         setLoading(false);
+        clearTimeout(loaderTimer);
       }
     }
 
     const loop = async () => {
       await fetchOnce();
-  if (!unmounted) timer = setTimeout(loop, 300); // sneller: ~0.3s
+      if (!unmounted) timer = setTimeout(loop, 200);
     };
 
     loop();
-    return () => { unmounted = true; if (timer) clearTimeout(timer); };
+    return () => { unmounted = true; if (timer) clearTimeout(timer); if (toastTimerRef.current) clearTimeout(toastTimerRef.current); };
   }, []);
 
   const splitMode = batches.filter(b => b && b.currentProduct).length >= 2;
@@ -433,10 +471,17 @@ export default function HomePage() {
     return { totalProducts, todoProducts };
   }, [dataItems, total, done]);
 
-
+  const showEmpty = !loading && !splitMode && !currentProduct && (!batches || batches.length === 0);
 
   return (
     <div className={styles.root}>
+      {/* Toast (single mode) */}
+      {!splitMode && toast && (
+        <div className={styles.toastWrap}>
+          <div className={styles.toastBubble}>{toast.text}</div>
+        </div>
+      )}
+
       {/* Topbar */}
       <header className={styles.topbar}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
@@ -511,7 +556,7 @@ export default function HomePage() {
             <div className={styles.card}>
               {/* Locatie */}
               <h1 className={styles.location} style={{ marginTop: 0, marginBottom: '0.2em' }}>
-                <span className={styles.locBox}>
+                <span className={singleFx.locPulse ? styles.locFlash : styles.locBox}>
                   {currentProduct ? (currentProduct.stocklocation || currentProduct.stock_location || '—') : '—'}
                 </span>
               </h1>
@@ -538,7 +583,7 @@ export default function HomePage() {
               {/* Stats */}
               <div className={styles.stats}>
                 <div>
-                  <div className={styles.statValue}>{done}</div>
+                  <div className={`${styles.statValue} ${singleFx.bump ? styles.countPop : ''} ${singleFx.bump ? styles.countGreen : ''}`}>{done}</div>
                   <div className={styles.statLabel}>Gedaan</div>
                 </div>
                 <div>
@@ -563,6 +608,12 @@ export default function HomePage() {
                 </div>
               )}
             </div>
+          </div>
+        ) : showEmpty ? (
+          <div style={{ textAlign: 'center', marginTop: 64, color: '#888', fontSize: '1.5rem', fontWeight: 500 }}>
+            Geen actieve batch of pickdata gevonden.
+            <br />
+            <span style={{ fontSize: '1rem', color: '#aaa' }}>Wacht op een nieuwe batch in Picqer…</span>
           </div>
         ) : null}
       </main>
