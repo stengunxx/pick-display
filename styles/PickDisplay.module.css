@@ -22,10 +22,26 @@
 .navBtn:hover,.navBtn:focus{ background:#23232a; box-shadow:0 0 0 2px #2f2f38; }
 .debugBtn{ color:var(--accent); text-shadow:0 0 6px var(--accent); box-shadow:0 0 8px 0 var(--accent); }
 .status{ color:var(--muted); font-size:1rem; text-align:right; font-weight:500; }
+.statusRow{ display:flex; gap:16px; flex-wrap:wrap; align-items:center; justify-content:flex-end; }
+.statusRow strong{ color:var(--text); font-weight:800; }
+.clock{ color:var(--accent); font-weight:700; }
+.headerProgress{
+  height:6px; width:min(360px,45vw);
+  margin-top:6px; margin-left:auto;
+  background:#141416; border:1px solid var(--border);
+  border-radius:999px; overflow:hidden;
+}
+.headerProgress i{
+  display:block; height:100%;
+  background:linear-gradient(90deg,#ffd166,#ffe7b3);
+}
 
 /* Main = viewport minus topbar */
 .main{
-  height:calc(100vh - 58px); overflow:hidden; width:100%;
+  height:calc(100vh - 58px);
+  overflow-y:auto;
+  overflow-x:hidden;
+  width:100%;
   display:flex; align-items:center; justify-content:center; padding:0 16px;
 }
 
@@ -34,11 +50,13 @@
 .card{
   width:min(96vw,1400px); background:transparent; border:0; box-shadow:none;
   padding:clamp(8px,2vh,16px) 0; display:flex; flex-direction:column; align-items:center; gap:12px;
+  margin-left:auto; margin-right:auto;
 }
 .location{
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
-  font-weight:900; text-align:center; line-height:.88; letter-spacing:.03em;
-  font-size:clamp(6rem, 13vw, 18rem); margin:0 0 .12em 0;
+  font-weight:900; text-align:center; line-height:.86; letter-spacing:.03em;
+  font-size:clamp(4.8rem, 14vmin, 16rem);   /* was: clamp(6rem,13vw,18rem) */
+  margin:0 0 .1em 0;
 }
 .meta{ text-align:center; margin-bottom:.25rem; }
 .productName{ font-weight:700; font-size:clamp(1.2rem,2vw,2rem); }
@@ -81,8 +99,12 @@
 .nextSection{ border-top:1px solid var(--border); padding-top:1rem; margin-top:.6rem; width:100%; }
 .nextTitle{
   text-align:center; font-weight:900; color:var(--text);
-  font-size:clamp(1.6rem,3vw,2.6rem); margin-bottom:.5rem;
-  text-shadow:0 1px 0 rgba(255,255,255,.05);
+  font-size:clamp(1.6rem,3vw,2.6rem); margin-bottom:.4rem;
+}
+.nextScroll{
+  max-height:clamp(120px, 24vh, 320px);   /* nooit buiten beeld */
+  overflow-y:auto;
+  padding:6px 0;
 }
 .badges{ display:flex; flex-wrap:wrap; justify-content:center; gap:clamp(10px,2vw,24px); }
 .badge{
@@ -98,7 +120,13 @@
   gap:12px; overflow:hidden;
 }
 .splitPaneTop,.splitPaneBottom{
-  min-height:0; overflow:hidden; display:flex; align-items:center; justify-content:center; padding:0;
+  min-height:0;
+  /* niet centreren, we willen alle content tonen */
+  align-items:stretch;
+  justify-content:center;
+  /* geen clipping van onder-elementen */
+  overflow:visible;
+  padding:0;
 }
 .splitPaneTop{ border-bottom:2px solid var(--border); }
 
@@ -106,9 +134,10 @@
 .panelCard{
   width:100%; box-sizing:border-box;
   background:rgba(255,255,255,.03); border:1px solid var(--border); border-radius:18px;
-  padding:12px 16px 56px; /* extra ruimte onderin voor chips */
+  padding:12px 16px 20px;
   box-shadow:0 10px 30px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.04);
-  display:flex; flex-direction:column; gap:10px;
+  display:flex; flex-direction:column; gap:10px; align-items:center;
+  margin-left:auto; margin-right:auto;
 }
 .panelTitle{ text-align:center; font-weight:800; color:var(--muted); margin:2px 0 4px; font-size:clamp(.9rem,1.6vw,1.1rem); }
 .progressMini{ width:min(640px,90%); height:8px; margin:0 auto; background:#141416; border:1px solid var(--border); border-radius:999px; overflow:hidden; }
@@ -117,9 +146,47 @@
 .locationSplit{
   font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   font-weight:900; text-align:center; line-height:.92; color:var(--text);
-  font-size:clamp(2.6rem, min(8.5vw, 11vh), 7.2rem);
-  margin:.06em 0;
+  /* iets compacter dan eerst */
+  font-size:clamp(2.0rem, min(7vw, 9vh), 5.6rem);
+  margin:.06em 0 .25rem 0;
+/* Per-paneel totals (nieuwe klasse) */
 }
+
+.miniTotals{
+  display:flex; gap:16px; justify-content:center; align-items:center;
+  color:var(--muted); font-size:clamp(.85rem,1.4vw,1rem);
+  margin-top:4px;
+}
+.miniTotals b{ color:var(--text); font-weight:800; }
+
+/* Nieuwe strip voor “Volgende locaties” (altijd zichtbaar) */
+.nextStrip{
+  margin-top:auto; /* duw strip naar onderkant van kaart */
+  padding-top:8px;
+  border-top:1px solid var(--border);
+}
+.nextStripTitle{
+  text-align:center; color:var(--muted);
+  font-weight:700; font-size:clamp(.8rem,1.2vw,1rem);
+  margin-bottom:6px;
+}
+.nextStripScroller{
+  display:flex; gap:10px; align-items:center; justify-content:flex-start;
+  overflow-x:auto; overflow-y:hidden; padding-bottom:4px;
+  -webkit-overflow-scrolling:touch;
+  scrollbar-width:thin;
+  max-width:100%;
+  margin:0 auto;
+}
+.chipSmall{
+  flex:0 0 auto;
+  background:#1b1b1f; color:var(--text); border:1px solid var(--ring);
+  border-radius:999px; padding:.35em .9em; font-weight:800;
+  font-size:clamp(.85rem,1.8vw,1.1rem);
+  box-shadow:0 3px 12px rgba(0,0,0,.25), inset 0 0 0 1px rgba(255,255,255,.03);
+  white-space:nowrap;
+}
+
 .metaSplit{ text-align:center; }
 .productNameSplit{ font-weight:700; font-size:clamp(.95rem,1.6vw,1.25rem); }
 .skuSplit{ color:var(--muted); font-size:.95rem; }
@@ -190,7 +257,7 @@
 .nextSection{ border-top:1px solid var(--border); padding-top:1rem; margin-top:.6rem; width:100%; }
 .nextTitle{
   text-align:center; font-weight:900; color:var(--text);
-  font-size:clamp(1.6rem,3vw,2.6rem); margin-bottom:.5rem;
+  font-size:clamp(1.6rem,3vw,2.6rem); margin-bottom:.4rem;
 }
 .nextGrid{
   display:flex; flex-wrap:wrap; justify-content:center;
@@ -199,7 +266,7 @@
   margin: 0 auto;
 }
 .badgeBig{
-  font-size: clamp(1.1rem, 2.6vw, 2.1rem);
+  font-size: clamp(1rem, 2.2vw, 1.8rem);  /* iets kleiner */
   font-weight: 900;
   padding: .35em 1.1em;
   border-radius: 1em;
@@ -209,6 +276,10 @@
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+@media (max-height: 860px) {
+  .statValue{ font-size: clamp(2.4rem, 4vw, 5rem); }
+  .badgeBig{ font-size: clamp(.95rem, 2vw, 1.6rem); }
+}
 
 /* Responsive: onder ~1200px stackt de hero */
 @media (max-width: 1200px) {
@@ -217,4 +288,57 @@
     align-items: center;
   }
   .heroImg { order: 2; }
+}
+
+/* Per-paneel totals (klas die in TSX gebruikt wordt) */
+.batchInlineTotals{
+  display:flex; gap:12px; justify-content:center; align-items:center;
+  color:var(--muted); font-size:clamp(.85rem,1.4vw,1rem);
+  margin-top:4px;
+}
+.batchInlineTotals b{ color:var(--text); font-weight:800; }
+
+/* Rij met "Totaal | Productnaam (SKU) | Gedaan"  */
+.metaRow{
+  display:grid;
+  grid-template-columns: 1fr minmax(0, 2fr) 1fr;
+  align-items:center;
+  gap:12px;
+  margin-top:6px;
+}
+.metaLeft, .metaRight{
+  color:var(--muted);
+  font-weight:700;
+  font-size:clamp(.95rem,1.6vw,1.05rem);
+}
+.nameCenter{
+  text-align:center;
+  font-weight:800;
+  font-size:clamp(1.05rem,1.8vw,1.25rem);
+  line-height:1.15;
+}
+.skuSplit{
+  color:var(--muted);
+  font-size: .9rem;
+  margin-top: 2px;
+}
+
+/* Center de panelen horizontaal in split view */
+.splitWrap{
+  /* grid heeft rijen; dit centreert elk grid-item horizontaal */
+  justify-items: center;
+}
+
+.splitPaneTop,
+.splitPaneBottom{
+  display: flex;              /* maak de rijen flex containers */
+  justify-content: center;    /* centreer de inhoud horizontaal */
+}
+
+/* Zorg dat het paneel zelf zich netjes centreert met vaste max-breedte */
+.panel{
+  margin-left: auto;
+  margin-right: auto;
+  /* (optioneel) als je smaller wilt dan 1200px, pas deze aan: */
+  /* width: min(1100px, 96vw); */
 }

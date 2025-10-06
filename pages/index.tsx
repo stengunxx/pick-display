@@ -1,254 +1,144 @@
-// ===== image utils: multi-ext fallback & probing cache =====
-const EXT_CANDIDATES = ["jpg", "jpeg", "png", "webp", "gif", "bmp", "avif"] as const;
+'use client';
+
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { signOut } from 'next-auth/react';
+import styles from '../styles/PickDisplay.module.css';
+
+/* ===================== IMAGE HELPERS ===================== */
+
+const EXT_CANDIDATES = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'avif'] as const;
 const probeCache = new Map<string, boolean>();
 
 function stripQuery(u: string) {
   if (!u) return u;
-  const i = u.indexOf("?");
+  const i = u.indexOf('?');
   return i >= 0 ? u.slice(0, i) : u;
 }
-
+function upgradeInsecure(u: string) {
+  if (!u) return '';
+  if (u.startsWith('//')) return (typeof location !== 'undefined' ? location.protocol : 'https:') + u;
+  if (typeof location !== 'undefined' && location.protocol === 'https:' && u.startsWith('http:')) {
+    return u.replace(/^http:/, 'https:');
+  }
+  return u;
+}
 function buildSkuFallbacks(sku: string, tpl: string): string[] {
   if (!sku || !tpl) return [];
-  let urls: string[] = [];
-
-  // {sku} + optioneel {ext}
-  if (tpl.includes("{ext}")) {
-    for (const ext of EXT_CANDIDATES) {
-      urls.push(tpl.replace("{sku}", sku).replace("{ext}", ext));
-    }
+  const urls: string[] = [];
+  if (tpl.includes('{ext}')) {
+    for (const ext of EXT_CANDIDATES) urls.push(tpl.replace('{sku}', sku).replace('{ext}', ext));
   } else {
-    const expanded = tpl.replace("{sku}", sku);
+    const expanded = tpl.replace('{sku}', sku);
     const noQuery = stripQuery(expanded);
     const hasKnownExt = /\.(jpg|jpeg|png|webp|gif|bmp|avif)$/i.test(noQuery);
-
     if (hasKnownExt) {
-      const base = expanded.replace(/\.(jpg|jpeg|png|webp|gif|bmp|avif)(\?.*)?$/i, "");
+      const base = expanded.replace(/\.(jpg|jpeg|png|webp|gif|bmp|avif)(\?.*)?$/i, '');
       for (const ext of EXT_CANDIDATES) urls.push(`${base}.${ext}`);
     } else {
-      // geen extensie in tpl → probeer "zoals-is" + met alle extensies erachter
       urls.push(expanded);
       for (const ext of EXT_CANDIDATES) urls.push(`${expanded}.${ext}`);
     }
   }
   return urls.map(upgradeInsecure);
 }
-
 function getImageCandidates(x: any): string[] {
   if (!x) return [];
-  const fields: any[] = [
-    // Picqer image direct uit product-object
-    x.image,
-    x.imageUrl,
-    x.image_url,
-    x.imageURL,
-    x.foto,
-    x.afbeelding,
-    x.product_image,
-    x.productImage,
-    x.thumbnail,
-    x.thumb,
-    x.thumbUrl,
-    x.thumb_url,
-    x.productimage,
-    x.product_image_url,
-    x.image_path,
-    x.image_small,
-    x.image_large,
-    // Picqer: images array met echte url
+  const fields = [
+    x.image, x.imageUrl, x.image_url, x.imageURL,
+    x.foto, x.afbeelding, x.product_image, x.productImage,
+    x.thumbnail, x.thumb, x.thumbUrl, x.thumb_url,
+    x.productimage, x.product_image_url, x.image_path, x.image_small, x.image_large,
+    x.image?.url, x.image?.src, x.main_image?.url, x.mainImage?.url,
+    x.primary_image?.url, x.primaryImage?.url,
+    x.product?.image, x.product?.imageUrl, x.product?.image_url, x.product?.image?.url,
     Array.isArray(x.images) ? (x.images[0]?.url ?? x.images[0]?.src ?? x.images[0]) : undefined,
-    // Picqer: images als array van strings
-    Array.isArray(x.images) ? x.images[0] : undefined,
-    // objecten
-    x.image?.url,
-    x.image?.src,
-    x.main_image?.url,
-    x.mainImage?.url,
-    x.primary_image?.url,
-    x.primaryImage?.url,
-    x.product?.image,
-    x.product?.imageUrl,
-    x.product?.image_url,
-    x.product?.image?.url,
-    // arrays
     Array.isArray(x.media)  ? (x.media[0]?.url  ?? x.media[0]?.src  ?? x.media[0])  : undefined,
     Array.isArray(x.assets) ? (x.assets[0]?.url ?? x.assets[0]) : undefined,
     Array.isArray(x.gallery)? (x.gallery[0]?.url ?? x.gallery[0]) : undefined,
-  ].filter(Boolean);
+  ].filter(Boolean).map(String).map(upgradeInsecure);
 
-  const sku = x?.productcode ?? x?.sku ?? x?.product?.sku ?? "";
-  const tpl = (typeof process !== "undefined" && process.env?.NEXT_PUBLIC_IMAGE_BY_SKU_TEMPLATE) || "";
-
-  const fromData = fields
-    .map(String)
-    .map(upgradeInsecure)
-    .filter(Boolean);
-
+  const sku = x?.productcode ?? x?.sku ?? x?.product?.sku ?? '';
+  const tpl = (typeof process !== 'undefined' && (process as any).env?.NEXT_PUBLIC_IMAGE_BY_SKU_TEMPLATE) || '';
   const fromSku = sku && tpl ? buildSkuFallbacks(String(sku), String(tpl)) : [];
 
-  // dedupe, data-urls eerst
   const seen = new Set<string>();
-  const all = [...fromData, ...fromSku].filter(u => (seen.has(u) ? false : (seen.add(u), true)));
-  return all;
+  return [...fields, ...fromSku].filter(u => (seen.has(u) ? false : (seen.add(u), true)));
 }
-
 function probeImage(url: string): Promise<boolean> {
   if (!url) return Promise.resolve(false);
   if (probeCache.has(url)) return Promise.resolve(!!probeCache.get(url));
-
-  return new Promise<boolean>((resolve) => {
+  return new Promise<boolean>(resolve => {
     const img = new Image();
     img.onload = () => { probeCache.set(url, true); resolve(true); };
     img.onerror = () => { probeCache.set(url, false); resolve(false); };
     img.src = url;
   });
 }
-
 async function selectFirstReachable(urls: string[]): Promise<string> {
   for (const u of urls) {
-    const ok = await probeImage(u);
-    if (ok) return u;
+    if (await probeImage(u)) return u;
   }
-  return "";
-}
-function pick<T>(...vals: T[]): T | undefined {
-  return vals.find(Boolean) as any;
+  return '';
 }
 
-function upgradeInsecure(u: string): string {
-  if (!u) return "";
-  if (u.startsWith("//")) return (typeof location !== "undefined" ? location.protocol : "https:") + u;
-  if (typeof location !== "undefined" && location.protocol === "https:" && u.startsWith("http:")) {
-    return u.replace(/^http:/, "https:");
-  }
-  return u;
-}
+type ProductImageProps = { item: any; max?: number; radius?: number; alt?: string; debugSwitch?: boolean; };
+function ProductImage({ item, max = 200, radius = 12, alt = 'Productfoto', debugSwitch }: ProductImageProps) {
+  const [url, setUrl] = useState('');
+  const [tried, setTried] = useState<string[]>([]);
+  const candidates = useMemo(() => getImageCandidates(item), [item]);
 
-function getImageUrl(x: any): string {
-  if (!x) return "";
-
-  const candidates: any[] = [
-    // strings
-    x.image, x.imageUrl, x.image_url, x.imageURL,
-    x.foto, x.afbeelding, x.product_image, x.productImage,
-    x.thumbnail, x.thumb, x.thumbUrl, x.thumb_url,
-    x.productimage, x.product_image_url, x.image_path, x.image_small, x.image_large,
-
-    // objecten met url/src
-    x.image?.url, x.image?.src, x.main_image?.url, x.mainImage?.url,
-    x.primary_image?.url, x.primaryImage?.url,
-    x.product?.image, x.product?.imageUrl, x.product?.image_url, x.product?.image?.url,
-
-    // arrays
-    Array.isArray(x.images) ? (x.images[0]?.url ?? x.images[0]?.src ?? x.images[0]) : undefined,
-    Array.isArray(x.media)  ? (x.media[0]?.url  ?? x.media[0]?.src  ?? x.media[0])  : undefined,
-    Array.isArray(x.assets) ? (x.assets[0]?.url ?? x.assets[0]) : undefined,
-    Array.isArray(x.gallery)? (x.gallery[0]?.url ?? x.gallery[0]) : undefined,
-  ];
-    // Debug logging voor image velden
-    console.log("[IMG DEBUG]", { keys: Object.keys(x), resolved: candidates });
-
-  const raw = candidates.find(Boolean);
-  let url = typeof raw === "string" ? raw : "";
-
-  // Optionele SKU fallback via env template
-  if (!url) {
-    const sku = x?.productcode ?? x?.sku ?? x?.product?.sku ?? "";
-    const tpl = (typeof process !== "undefined" && process.env?.NEXT_PUBLIC_IMAGE_BY_SKU_TEMPLATE) || "";
-    if (tpl && sku) {
-      // Debug: toon exacte fallback URL
-      url = tpl.replace("{sku}", String(sku));
-    }
-  }
-
-  return upgradeInsecure(url);
-}
-
-type ProductImageProps = {
-  item: any;
-  max?: number;
-  radius?: number;
-  alt?: string;
-  style?: React.CSSProperties;
-  debugSwitch?: boolean;
-};
-
-function ProductImage({
-  item, max = 200, radius = 12, alt = "Productfoto", style, debugSwitch
-}: ProductImageProps) {
-  const [url, setUrl] = React.useState<string>("");
-  const [tried, setTried] = React.useState<string[]>([]);
-  const candidates = React.useMemo(() => getImageCandidates(item), [item]);
-
-  React.useEffect(() => {
+  useEffect(() => {
     let cancelled = false;
     (async () => {
-      setUrl(""); setTried([]);
+      setUrl(''); setTried([]);
       if (!candidates.length) return;
       setTried(candidates);
       const found = await selectFirstReachable(candidates);
       if (!cancelled) setUrl(found);
     })();
     return () => { cancelled = true; };
-  }, [candidates.join("|")]);
+  }, [candidates.join('|')]);
 
   if (!url) {
-    if (!debugSwitch) return null; // geen placeholder in productie
-    const sku = item?.productcode ?? item?.sku ?? item?.product?.sku ?? "";
+    if (!debugSwitch) return null;
     return (
-      <div style={{ textAlign: "center", marginBottom: 12 }}>
-        <div
-          style={{
-            width: max, height: max, borderRadius: radius,
-            background: "#111", color: "#555", display: "inline-flex",
-            alignItems: "center", justifyContent: "center",
-            fontWeight: 700, fontSize: 12, border: "1px solid #222", ...style
-          }}
-        >
+      <div style={{ textAlign: 'center', marginBottom: 12 }}>
+        <div style={{
+          width: max, height: max, borderRadius: radius,
+          background: '#111', color: '#555', display: 'inline-flex',
+          alignItems: 'center', justifyContent: 'center',
+          fontWeight: 700, fontSize: 12, border: '1px solid #222'
+        }}>
           geen foto (debug)
         </div>
-        <div style={{ marginTop: 6, fontSize: 11, color: "#888" }}>
-          Kandidaten geprobeerd:
-          <div style={{ maxWidth: 560, margin: "6px auto 0", textAlign: "left", fontFamily: "ui-monospace", fontSize: 11 }}>
-            {tried.map((u, i) => <div key={u + i}>{u}</div>)}
-          </div>
-          {sku ? <div style={{ marginTop: 6 }}>SKU: <span style={{ fontFamily: "ui-monospace" }}>{sku}</span></div> : null}
+        <div style={{ marginTop: 6, fontSize: 11, color: '#888', maxWidth: 560, marginInline: 'auto', textAlign: 'left', fontFamily: 'ui-monospace' }}>
+          {tried.map((u, i) => <div key={u + i}>{u}</div>)}
         </div>
       </div>
     );
   }
 
   return (
-    <div style={{ textAlign: "center", marginBottom: 12 }}>
-      <img
-        key={url}
-        src={url}
-        alt={alt}
-        loading="lazy"
-        decoding="async"
-        referrerPolicy="no-referrer"
-        style={{
-          maxWidth: max, maxHeight: max, objectFit: "contain",
-          borderRadius: radius, boxShadow: "0 2px 16px rgba(0,0,0,.2)",
-          background: "#111", padding: 8, margin: "0 auto",
-          ...style
-        }}
-      />
-      {debugSwitch && (
-        <div style={{ marginTop: 6, fontSize: 11, color: "#888" }}>
-          gekozen url: <span style={{ fontFamily: "ui-monospace" }}>{url}</span>
-        </div>
-      )}
-    </div>
+    <img
+      key={url}
+      src={url}
+      alt={alt}
+      loading="lazy"
+      decoding="async"
+      referrerPolicy="no-referrer"
+      style={{
+        maxWidth: max, maxHeight: max,
+        objectFit: 'contain',
+        borderRadius: radius,
+        boxShadow: '0 2px 16px rgba(0,0,0,.2)',
+        background: '#111', padding: 8, margin: '0 auto', display: 'block'
+      }}
+    />
   );
 }
-// ...existing code...
-// ...existing code...
-import React, { useEffect, useState, useRef, startTransition } from "react";
-import { signOut } from "next-auth/react";
-import styles from "../styles/PickDisplay.module.css";
 
-/* ========== TYPES ========== */
+/* ===================== TYPES & HELPERS ===================== */
+
 type BatchView = {
   batchId: string | number;
   currentProduct: any | null;
@@ -258,100 +148,73 @@ type BatchView = {
   total: number;
   progress: number;
   nextLocations: string[];
-  // optioneel (alleen voor primary / single view):
   items?: any[];
   totalProducts?: number;
   todoProducts?: number;
 };
-
-type PickData = {
-  location: string;
-  product: string;
-  debug?: { picklistId?: number | string; itemId?: number | string };
-  items?: any[];
-  nextLocations?: string[];
-  done?: boolean;
-};
-
 type MiniFx = Record<string | number, { locPulse: boolean; bump: boolean; newPick?: boolean }>;
 
-/* ========== MINI CARD ========== */
-function renderBatchMini(
-    b: BatchView,
-    styles: any,
-    fx?: { locPulse?: boolean; bump?: boolean; newPick?: boolean },
-    debugSwitch?: boolean
+const collator = new Intl.Collator('nl', { numeric: true, sensitivity: 'base' });
+const locOf = (it: any) => (it?.stocklocation ?? it?.stock_location ?? '').toString();
+const pickedOf = (it: any) => Number(it?.amountpicked ?? it?.amount_picked ?? 0);
+const totalOf  = (it: any) => Number(it?.amount ?? it?.amount_to_pick ?? 0);
+
+/* ===================== MINI PANEL ===================== */
+
+function RenderBatchMini(
+  { b, fx, debug }: { b: BatchView; fx?: { locPulse?: boolean; bump?: boolean; newPick?: boolean }; debug?: boolean }
 ) {
   if (!b) return null;
   const cur = b.currentProduct;
-  const loc = cur ? cur.stocklocation || cur.stock_location || "—" : "—";
+  const loc = cur ? (cur.stocklocation || cur.stock_location || '—') : '—';
+
   return (
     <div className={styles.panel}>
-      <div className={styles.panelCard} style={{ position: "relative" }}>
-        {/* per-kaart badge */}
-        {fx?.newPick && (
-          <div
-            style={{
-              position: "absolute",
-              top: -10,
-              left: "50%",
-              transform: "translateX(-50%)",
-              background: "#ffd166",
-              color: "#222",
-              fontWeight: 800,
-              fontSize: "1.0rem",
-              padding: "0.35rem 1rem",
-              borderRadius: "1rem",
-              border: "2px solid #ffe7b3",
-              boxShadow: "0 6px 24px rgba(0,0,0,.35)",
-              zIndex: 2,
-              pointerEvents: "none",
-            }}
-          >
-            Nieuwe picklist!
-          </div>
-        )}
+      <div className={styles.panelCard} style={{ position: 'relative' }}>
         <div className={styles.panelTitle}>
           Batch #{String(b.batchId)} • Voortgang: {b.progress}%
         </div>
         <div className={styles.progressMini}>
           <i style={{ width: `${Math.max(0, Math.min(100, b.progress || 0))}%` }} />
         </div>
+
+        {typeof b.totalProducts === 'number' && typeof b.todoProducts === 'number' && (
+          <div className={(styles as any).batchInlineTotals}>
+            <span>Nog te doen: <b>{b.todoProducts}</b></span>
+            <span>·</span>
+            <span>Totaal: <b>{b.totalProducts}</b></span>
+          </div>
+        )}
+
         <h1 className={styles.locationSplit}>
-          <span
-            className={`${fx?.locPulse ? styles.locPulse : ""}`}
-            style={{ display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-          >
-            {loc}
-          </span>
+          <span className={fx?.locPulse ? styles.locPulse : ''}>{loc}</span>
         </h1>
-        {/* Productfoto mini-kaart */}
-  <ProductImage item={cur} max={72} radius={8} alt={cur?.product || cur?.name || "Productfoto"} debugSwitch={debugSwitch} />
-        <div className={styles.metaSplit}>
-          <div className={styles.productNameSplit}>{b.product}</div>
-          <div className={styles.skuSplit}>
-            SKU: <span style={{ fontFamily: "ui-monospace" }}>{b.sku}</span>
+
+        <ProductImage
+          item={cur}
+          max={64}
+          radius={8}
+          alt={cur?.product || cur?.name || 'Productfoto'}
+          debugSwitch={!!debug}
+        />
+
+        <div className={(styles as any).metaRow}>
+          <div className={(styles as any).metaLeft}>Gedaan: <b className={fx?.bump ? styles.bumpFlash : ''}>{b.done}</b></div>
+          <div className={(styles as any).nameCenter}>
+            {b.product}
+            <div className={styles.skuSplit}>
+              SKU: <span style={{ fontFamily: 'ui-monospace' }}>{b.sku}</span>
+            </div>
           </div>
-        </div>
-        <div className={styles.statsSplit}>
-          <div>
-            <div className={`${styles.statValue} ${fx?.bump ? styles.bumpFlash : ""}`}>{b.done}</div>
-            <div className={styles.statLabel}>Gedaan</div>
-          </div>
-          <div>
-            <div className={styles.statValue}>{b.total}</div>
-            <div className={styles.statLabel}>Totaal</div>
-          </div>
+          <div className={(styles as any).metaRight}>Totaal: <b>{b.total}</b></div>
         </div>
 
         {Array.isArray(b.nextLocations) && b.nextLocations.length > 0 && (
-          <div className={styles.nextSplit}>
-            <div className={styles.nextSplitTitle}>Volgende locaties:</div>
-            <div style={{ display: "flex", justifyContent: "center", gap: 10, flexWrap: "wrap" }}>
-              {b.nextLocations.map((loc: string, i: number) => (
-                <span key={loc + String(i)} className={styles.badge}>
-                  {loc}
-                </span>
+          <div className={(styles as any).nextStrip}>
+            <div className={(styles as any).nextStripTitle}>Volgende locaties</div>
+            <div className={(styles as any).nextStripScroller}>
+              {b.nextLocations.map((L: string, i: number) => (
+                <span key={L + String(i)} className={(styles as any).chipSmall}>{L}</span>
               ))}
             </div>
           </div>
@@ -361,492 +224,248 @@ function renderBatchMini(
   );
 }
 
-/* ========== PAGE ========== */
+/* ===================== PAGE ===================== */
+
 export default function HomePage() {
-  const [debug, setDebug] = useState<boolean>(false);
-  // State needed everywhere
+  const [debug, setDebug] = useState(false);
+
+  // header state
+  const [now, setNow] = useState('');
+  const [picklistId, setPicklistId] = useState<string>('');
+  const [progress, setProgress] = useState(0);
+
+  // single view state
   const [currentProduct, setCurrentProduct] = useState<any | null>(null);
-
-  // per-mini picklist-key en timers voor de badge
-  const miniPickKeyRef = useRef<Record<string | number, string>>({});
-  const miniPickTimerRef = useRef<Record<string | number, number>>({});
-
-  // ...existing code...
-
-  // Debug logging voor image velden
-  React.useEffect(() => {
-    if (debug && currentProduct) {
-      const keys = Object.keys(currentProduct || {});
-      const nested = currentProduct.product ? Object.keys(currentProduct.product) : [];
-      console.log("[IMG DEBUG]", { keys, nested, resolved: getImageUrl(currentProduct), currentProduct });
-    }
-  }, [debug, currentProduct]);
-
-  function markMiniNewPick(id: string | number) {
-    setMiniFx((curr: MiniFx) => ({ ...curr, [id]: { ...(curr[id] || { locPulse:false, bump:false }), newPick: true } }));
-    if (miniPickTimerRef.current[id]) clearTimeout(miniPickTimerRef.current[id]);
-    miniPickTimerRef.current[id] = window.setTimeout(() => {
-      setMiniFx((curr: MiniFx) => ({ ...curr, [id]: { ...(curr[id] || {}), newPick: false } }));
-    }, 1600);
-  }
-  // — Nieuw: picklist-key voor betrouwbare detectie
-  const prevPickKeyRef = useRef<string | null>(null);
-  const pickKeyInitRef = useRef(false);
-
-  function getPicklistKey(v: BatchView & { items?: any[] }) {
-    const cp = v.currentProduct || {};
-    // 1) probeer echte id-velden op meerdere plaatsen/benamingen
-    const hardId =
-      cp.picklist_id ??
-      cp.picklistId ??
-      cp.picklist?.id ??
-      (v as any).picklist_id ??
-      (v as any).picklistId;
-    if (hardId != null && hardId !== "") return `id:${String(hardId)}`;
-
-    // 2) fallback: signature op basis van de eerste ~8 items (sku/productcode/id)
-    const items = Array.isArray(v.items) ? v.items : [];
-    const sig = items
-      .slice(0, 8)
-      .map((it: any) =>
-        String(
-          it.picklist_id ??
-            it.picklistId ??
-            it.picklist?.id ??
-            it.productcode ??
-            it.sku ??
-            it.id ??
-            it.product_id ??
-            ""
-        )
-      )
-      .join("|");
-
-    return `sig:${sig}`;
-  }
-  // Detectie picklist-wissel (ook binnen dezelfde batch)
-  const prevPicklistIdRef = useRef<string | number | null>(null);
-  // ----- UI state -----
-  const [batches, setBatches] = useState<BatchView[]>([]);
-  const batchIdsRef = useRef<(string | number)[]>([]);
-  const [now, setNow] = useState<string>("");
-  const [data, setData] = useState<PickData>({ location: "", product: "" });
-  const [sku, setSku] = useState<string>("");
-  const [done, setDone] = useState<number>(0);
-  const [total, setTotal] = useState<number>(0);
-  const [picklistId, setPicklistId] = useState<string>("");
-  const [progress, setProgress] = useState<number>(0);
+  const [dataItems, setDataItems] = useState<any[]>([]);
+  const [sku, setSku] = useState('');
+  const [done, setDone] = useState(0);
+  const [total, setTotal] = useState(0);
   const [nextLocations, setNextLocations] = useState<string[]>([]);
-  const [error, setError] = useState<string>("");
-  const [loading, setLoading] = useState<boolean>(true);
 
-  // toast queue
-  type Toast = { id: number; text: string };
-  const toastQRef = useRef<Toast[]>([]);
-  const [activeToast, setActiveToast] = useState<Toast | null>(null);
-  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  function pushToast(text: string) {
-    toastQRef.current.push({ id: Date.now(), text });
-    if (!activeToast) showNextToast();
-  }
-  function showNextToast() {
-    const next = toastQRef.current.shift() || null;
-    setActiveToast(next);
-    if (!next) return;
-    clearTimeout(toastTimerRef.current as any);
-    toastTimerRef.current = setTimeout(showNextToast, 1600);
-  }
-  useEffect(() => () => clearTimeout(toastTimerRef.current as any), []);
+  // split state
+  const [batches, setBatches] = useState<BatchView[]>([]);
+  const [miniFx, setMiniFx] = useState<MiniFx>({});
 
-  // animations (single view)
-  const [showLocAnim, setShowLocAnim] = useState(false);
-  const [showPickedAnim, setShowPickedAnim] = useState(false);
-  const prevLocRef = useRef("");
+  // misc
+  const [error, setError] = useState('');
+  const prevLocRef = useRef('');
   const prevDoneRef = useRef<number | null>(null);
 
-  // split-view animatiestate
-  const [miniFx, setMiniFx] = useState<MiniFx>({});
-  const miniPrevRef = useRef<Record<string | number, { loc: string; done: number }>>({});
-
-  // picklist-wissel toast (primary)
-  const prevBatchIdsRef = useRef(""); // detectie nieuwe batch-set
-  const prevPrimaryKeyRef = useRef<string | null>(null);
-  const initPrimaryRef = useRef(false);
-
-  // performance / polling
-  const pollDelayRef = useRef(1000);
-  const turboUntilRef = useRef(0);
-
-  // klokje
   useEffect(() => {
     const t = setInterval(() => {
       const d = new Date();
-      setNow(d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
+      setNow(d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
     }, 1000);
     return () => clearInterval(t);
   }, []);
 
-  // helpers
-  const noCache = {
-    cache: "no-store" as const,
-    headers: { "Cache-Control": "no-cache, no-store, must-revalidate", Pragma: "no-cache" }
-  };
-  const collator = new Intl.Collator("nl", { numeric: true, sensitivity: "base" });
-  const locOf = (it: any) => (it?.stocklocation ?? it?.stock_location ?? "").toString();
-
-  // polling
+  // Polling
   useEffect(() => {
     let unmounted = false;
-    let ctrl: AbortController | null = null;
     let timer: any = null;
 
-    const fetchOnce = async () => {
+    async function fetchOnce() {
       try {
-        ctrl?.abort();
-        ctrl = new AbortController();
-        const signal = ctrl.signal;
         const bust = `_=${Date.now() % 1e7}`;
-
-        // Loader timer: als het langer dan 500ms duurt, zet loading aan
-        let loaderTimeout = setTimeout(() => {
-          if (!loading) setLoading(true);
-        }, 500);
-
-        // 1) batch-ids en 2) batch-data tegelijk ophalen
-        const batchPromise = fetch(`/api/next-batch?${bust}`, { ...noCache, signal }).then(r => r.json());
-        const pickPromise = batchPromise.then(j => {
-          const ids: (string | number)[] = Array.isArray(j.batchIds) ? j.batchIds : (j.batchId ? [j.batchId] : []);
-          if (!ids || ids.length === 0) return { ids: [], settled: [] };
-          return Promise.allSettled(
-            ids.slice(0, 2).map(id =>
-              fetch(`/api/next-pick?batchId=${id}&${bust}`, { ...noCache, signal }).then(r => r.json())
-            )
-          ).then(settled => ({ ids, settled }));
-        });
-
-        // Wacht op beide tegelijk
-        const [j, pickResult] = await Promise.all([batchPromise, pickPromise]);
-  clearTimeout(loaderTimeout);
-  if (loading) setLoading(false);
-
+        const j = await fetch(`/api/next-batch?${bust}`, { cache: 'no-store' }).then(r => r.json());
         const ids: (string | number)[] = Array.isArray(j.batchIds) ? j.batchIds : (j.batchId ? [j.batchId] : []);
-        const sigIds = Array.from(new Set(ids.map(String))).sort().join(",");
-
-        // Nieuwe batch-set (bijv. batch toegevoegd/verwijderd)
-        const prevIdsArr = prevBatchIdsRef.current ? prevBatchIdsRef.current.split(",") : [];
-        // Alleen toasten als het aantal batches verandert
-        if (prevBatchIdsRef.current && prevIdsArr.length !== ids.length) {
-          pushToast("Nieuwe batch!");
-        }
-        prevBatchIdsRef.current = sigIds;
-
-        if (!ids || ids.length === 0 || !pickResult || !Array.isArray(pickResult.settled)) {
-          setLoading(false);
+        if (!ids || ids.length === 0) {
+          if (!unmounted) {
+            setBatches([]);
+            setCurrentProduct(null);
+            setDataItems([]);
+            setPicklistId('');
+            setProgress(0);
+          }
           return;
         }
 
-        // 2) data per batch (parallel)
-        const settled = pickResult.settled;
+        // pak max 2 voor split
+        const settled = await Promise.allSettled(
+          ids.slice(0, 2).map(id => fetch(`/api/next-pick?batchId=${id}&${bust}`, { cache: 'no-store' }).then(r => r.json()))
+        );
 
         const views: BatchView[] = [];
-        const fullViews: BatchView[] = [];
+
         for (let i = 0; i < settled.length; i++) {
           const res = settled[i];
-          if (res.status !== "fulfilled") continue;
+          if (res.status !== 'fulfilled') continue;
           const p = res.value;
 
-          const items = Array.isArray(p.items)
+          const items: any[] = Array.isArray(p.items)
             ? p.items.slice().sort((a: any, b: any) => collator.compare(locOf(a), locOf(b)))
             : [];
 
-          const pickedOf = (it: any) => Number(it?.amountpicked ?? it?.amount_picked ?? 0);
-          const totalOf  = (it: any) => Number(it?.amount ?? it?.amount_to_pick ?? 0);
-
-          const cur = items.find((it: any) => pickedOf(it) < totalOf(it)) ?? null;
+          const cur = items.find(it => pickedOf(it) < totalOf(it)) ?? null;
 
           const prog = items.length
-            ? Math.round((items.filter((it: any) => pickedOf(it) >= totalOf(it)).length / items.length) * 100)
+            ? Math.round((items.filter(it => pickedOf(it) >= totalOf(it)).length / items.length) * 100)
             : 0;
 
           let nextLocs: string[] = [];
           if (cur) {
-            const curIdx = items.findIndex((x: any) => x === cur);
+            const curIdx = items.findIndex(x => x === cur);
             const curLoc = locOf(cur);
             const seen = new Set<string>();
             nextLocs = items
-              .map((it: any, idx: number) => ({ it, idx }))
-              .filter(({ it, idx }: { it: any; idx: number }) => idx > curIdx && pickedOf(it) < totalOf(it))
-              .map(({ it }: { it: any }) => locOf(it))
-              .filter((loc: string) => loc && loc !== curLoc && (seen.has(loc) ? false : (seen.add(loc), true)));
+              .map((it, idx) => ({ it, idx }))
+              .filter(({ it, idx }) => idx > curIdx && pickedOf(it) < totalOf(it))
+              .map(({ it }) => locOf(it))
+              .filter(loc => loc && loc !== curLoc && (seen.has(loc) ? false : (seen.add(loc), true)));
           }
 
-          const totalProducts = items.reduce((s: number, it: any) => s + (it.amount ?? it.amount_to_pick ?? 0), 0);
-          const todoProducts  = items.reduce((s: number, it: any) => {
-            const a = it.amount ?? it.amount_to_pick ?? 0;
-            const p = it.amountpicked ?? it.amount_picked ?? 0;
-            return s + Math.max(0, a - p);
-          }, 0);
+          const totalProducts = items.reduce((s, it) => s + totalOf(it), 0);
+          const todoProducts  = items.reduce((s, it) => s + Math.max(0, totalOf(it) - pickedOf(it)), 0);
 
-          const common: BatchView = {
+          views.push({
             batchId: ids[i],
             currentProduct: cur,
-            product: (cur?.product ?? cur?.name ?? cur?.title ?? cur?.omschrijving ?? cur?.description ?? p.product ?? "") as string,
-            sku: (cur?.productcode ?? cur?.sku ?? "") as string,
+            product: (cur?.product ?? cur?.name ?? cur?.title ?? cur?.omschrijving ?? cur?.description ?? p.product ?? '') as string,
+            sku: (cur?.productcode ?? cur?.sku ?? '') as string,
             done: cur ? pickedOf(cur) : 0,
             total: cur ? totalOf(cur) : 0,
             progress: prog,
             nextLocations: nextLocs,
+            items,
             totalProducts,
             todoProducts,
-          };
-          views.push(common);
-          fullViews.push({ ...common, items });
+          });
         }
-        // Definieer active direct na views/fullViews
-        const active: BatchView[] = views.filter(v => v.currentProduct);
 
-        // split-view animaties (loc-wissel / done↑) per batch
-        setMiniFx(prevFx => {
-          const nextFx: MiniFx = { ...prevFx };
+        if (unmounted) return;
+
+        const active = views.filter(v => v.currentProduct);
+        setBatches(active);
+
+        // header / single state
+        const primary = active[0] || null;
+        setPicklistId(String(primary?.batchId ?? ids[0] ?? ''));
+        setProgress(primary?.progress ?? 0);
+
+        if (primary?.currentProduct) {
+          const loc = primary.currentProduct.stocklocation ?? primary.currentProduct.stock_location ?? '';
+          if (prevLocRef.current !== '' && prevLocRef.current !== loc) {
+            // optional location pulse – class handled by CSS, here we could toggle state if you want animation
+          }
+          prevLocRef.current = loc;
+
+          if (prevDoneRef.current != null && primary.done > prevDoneRef.current) {
+            // optional bump animation
+          }
+          prevDoneRef.current = primary.done;
+
+          setCurrentProduct(primary.currentProduct);
+          setDataItems(Array.isArray(primary.items) ? primary.items : []);
+          setSku(primary.sku);
+          setDone(primary.done);
+          setTotal(primary.total);
+          setNextLocations(primary.nextLocations);
+        } else {
+          setCurrentProduct(null);
+          setDataItems([]);
+          setSku('');
+          setDone(0);
+          setTotal(0);
+          setNextLocations([]);
+        }
+
+        // mini effects (loc/done change)
+        setMiniFx(prev => {
+          const next: MiniFx = { ...prev };
           for (const v of active) {
             const id = v.batchId;
-            const loc = String(v.currentProduct?.stocklocation ?? v.currentProduct?.stock_location ?? "");
-            const done = Number(v.done ?? 0);
-            const prev = miniPrevRef.current[id] || { loc, done };
-            const locChanged = prev.loc && prev.loc !== loc;
-            const doneIncreased = prev.done != null && done > prev.done;
-
-            if (locChanged || doneIncreased) {
-              nextFx[id] = { locPulse: !!locChanged, bump: !!doneIncreased };
-              setTimeout(() => {
-                setMiniFx(curr => ({ ...curr, [id]: { locPulse: false, bump: false } }));
-              }, locChanged ? 600 : 300);
-            }
-            miniPrevRef.current[id] = { loc, done };
+            const loc = String(v.currentProduct?.stocklocation ?? v.currentProduct?.stock_location ?? '');
+            const d = Number(v.done ?? 0);
+            const prevKey = `${(prev as any)[id]?.__loc ?? ''}|${(prev as any)[id]?.__done ?? -1}`;
+            const curKey  = `${loc}|${d}`;
+            const locChanged = prevKey.split('|')[0] !== loc;
+            const doneIncreased = Number(prevKey.split('|')[1]) < d;
+            next[id] = { locPulse: !!locChanged, bump: !!doneIncreased };
+            (next as any)[id].__loc = loc;
+            (next as any)[id].__done = d;
+            setTimeout(() => {
+              setMiniFx(curr => ({ ...curr, [id]: { ...(curr[id] || {}), locPulse: false, bump: false } }));
+            }, locChanged ? 600 : 300);
           }
-          // opruimen voor verdwenen batches
-          Object.keys(nextFx).forEach(k => {
-            if (!active.some((v: BatchView) => String(v.batchId) === String(k))) delete nextFx[k as any];
+          // cleanup missing ids
+          Object.keys(next).forEach(k => {
+            if (!active.some(v => String(v.batchId) === String(k))) delete (next as any)[k];
           });
-          return nextFx;
+          return next;
         });
 
-        // Per-mini picklist-wissel badge
-        for (const v of active) {
-          const id = v.batchId;
-          // pak de "full" variant om items mee te nemen voor de key
-          const full = fullViews.find((x: BatchView) => String(x.batchId) === String(id)) || v;
-          const newKey = getPicklistKey(full);
-
-          if (miniPickKeyRef.current[id] && miniPickKeyRef.current[id] !== newKey) {
-            // deze mini-kaart is naar een nieuwe picklist gesprongen → badge tonen
-            markMiniNewPick(id);
-          }
-          miniPickKeyRef.current[id] = newKey;
-        }
-        // opruimen (verdwenen mini’s)
-        Object.keys(miniPickKeyRef.current).forEach(k => {
-          if (!active.some((v: BatchView) => String(v.batchId) === String(k))) {
-            delete miniPickKeyRef.current[k];
-            if (miniPickTimerRef.current[k]) {
-              clearTimeout(miniPickTimerRef.current[k]);
-              delete miniPickTimerRef.current[k];
-            }
-          }
-        });
-
-        // lijst-state
-        startTransition(() => {
-          setBatches(prev => (sameBatchList(prev, active) ? prev : active));
-        });
-
-        // primary + picklist-wissel-toast
-        const primaryLite = active[0] || null;
-        if (primaryLite) {
-          const primaryFull = fullViews.find(v => v.batchId === primaryLite.batchId) || primaryLite;
-          // Betrouwbare detectie van picklist-wissel (ook binnen dezelfde batch)
-          const newPickKey = getPicklistKey(primaryFull);
-          const isSingleView = active.length === 1;
-          if (isSingleView) {
-            if (pickKeyInitRef.current) {
-              if (prevPickKeyRef.current && newPickKey && prevPickKeyRef.current !== newPickKey) {
-                pushToast("Nieuwe picklist!");
-              }
-            } else {
-              pickKeyInitRef.current = true; // eerste tick niet toasten
-            }
-          }
-          prevPickKeyRef.current = newPickKey;
-          startTransition(() => updatePrimaryIfChanged(primaryFull));
-        }
-
-        setError("");
-        setLoading(false);
+        setError('');
       } catch (e: any) {
-        if (e?.name === "AbortError") return;
-        setError(e?.message || "");
-        setLoading(false);
+        if (!unmounted) setError(e?.message || 'Er ging iets mis.');
       }
-    };
+    }
 
     const loop = async () => {
-      if (unmounted) return;
       await fetchOnce();
-      if (unmounted) return;
-      const now = Date.now();
-  pollDelayRef.current = 300;
-      timer = setTimeout(loop, pollDelayRef.current);
+      if (!unmounted) timer = setTimeout(loop, 800); // ~1s
     };
 
     loop();
-    return () => { unmounted = true; ctrl?.abort(); if (timer) clearTimeout(timer); };
-  }, [debug]);
+    return () => { unmounted = true; if (timer) clearTimeout(timer); };
+  }, []);
 
-  // vergelijk twee lijsten met batches heel goedkoop
-  function sameBatchList(a: BatchView[], b: BatchView[]) {
-    if (a === b) return true;
-    if (!a || !b || a.length !== b.length) return false;
-    for (let i = 0; i < a.length; i++) {
-      if (!sameBatch(a[i], b[i])) return false;
-    }
-    return true;
-  }
-  function sameBatch(a: BatchView, b: BatchView) {
-    if (!a || !b) return false;
-    const locA = a.currentProduct?.stocklocation ?? a.currentProduct?.stock_location ?? "";
-    const locB = b.currentProduct?.stocklocation ?? b.currentProduct?.stock_location ?? "";
-    return (
-      a.batchId === b.batchId &&
-      a.sku === b.sku &&
-      a.product === b.product &&
-      a.done === b.done &&
-      a.total === b.total &&
-      a.progress === b.progress &&
-      locA === locB &&
-      a.nextLocations.join("|") === b.nextLocations.join("|")
-    );
-  }
+  const splitMode = batches.filter(b => b && b.currentProduct).length >= 2;
 
-  // update de 'single view' velden alleen als er iets verandert
-  const lastPrimarySigRef = useRef("");
-  function updatePrimaryIfChanged(p: BatchView) {
-    const loc = p.currentProduct?.stocklocation ?? p.currentProduct?.stock_location ?? "";
-    const sig = `${p.batchId}|${p.sku}|${p.product}|${p.done}|${p.total}|${p.progress}|${loc}|${p.nextLocations.join(",")}`;
-    if (lastPrimarySigRef.current !== sig) {
-      turboUntilRef.current = Date.now() + 8000;
-      lastPrimarySigRef.current = sig;
-    }
-
-    if (prevLocRef.current && prevLocRef.current !== loc) {
-      setShowLocAnim(true);
-      setTimeout(() => setShowLocAnim(false), 600);
-    }
-    prevLocRef.current = loc;
-
-    if (prevDoneRef.current != null && p.done > prevDoneRef.current) {
-      setShowPickedAnim(true);
-      setTimeout(() => setShowPickedAnim(false), 300);
-    }
-    prevDoneRef.current = p.done;
-
-    const isSingleView = batches.filter(b => b && b.currentProduct).length === 1;
-    setCurrentProduct(p.currentProduct);
-    setData({ location: loc, product: p.product, items: isSingleView ? p.items : [] });
-    setSku(p.sku);
-    setDone(p.done);
-    setTotal(p.total);
-    setProgress(p.progress);
-    setNextLocations(p.nextLocations);
-    setPicklistId(String(p.batchId ?? ""));
-  }
-
-  const activeBatches = batches.filter((b) => b && b.currentProduct);
-
-  // totals helper
-  const pickTotals = React.useMemo(() => {
-    const arr = Array.isArray(data.items) ? data.items : [];
-    if (arr.length) {
-      const totalProducts = arr.reduce((s: number, it: any) => s + (it.amount ?? it.amount_to_pick ?? 0), 0);
-      const todoProducts  = arr.reduce((s: number, it: any) => {
-        const a = it.amount ?? it.amount_to_pick ?? 0;
-        const p = it.amountpicked ?? it.amount_picked ?? 0;
-        return s + Math.max(0, a - p);
-      }, 0);
-      return { totalProducts, todoProducts };
-    }
-    return { totalProducts: total, todoProducts: Math.max(0, total - done) };
-  }, [data.items, total, done]);
-
-  const debugText = React.useMemo(() => {
-    if (!debug) return "";
-    const first = Array.isArray(data.items) ? data.items[0] : null;
-    return JSON.stringify({ firstItem: first, currentProduct }, null, 2);
-  }, [debug, data.items, currentProduct]);
+  const pickTotals = useMemo(() => {
+    const items = Array.isArray(dataItems) ? dataItems : [];
+    if (!items.length) return { totalProducts: total, todoProducts: Math.max(0, total - done) };
+    const totalProducts = items.reduce((s, it) => s + totalOf(it), 0);
+    const todoProducts  = items.reduce((s, it) => s + Math.max(0, totalOf(it) - pickedOf(it)), 0);
+    return { totalProducts, todoProducts };
+  }, [dataItems, total, done]);
 
   return (
     <div className={styles.root}>
-      {activeToast && (
-        <div
-          style={{
-            position: "fixed",
-            top: 72,
-            left: 0,
-            right: 0,
-            display: "flex",
-            justifyContent: "center",
-            zIndex: 9999,
-            pointerEvents: "none",
-          }}
-        >
-          <div
-            style={{
-              background: "#ffd166",
-              color: "#222",
-              fontWeight: 800,
-              fontSize: "1.4rem",
-              padding: "0.75rem 2.0rem",
-              borderRadius: "1.25rem",
-              border: "2px solid #ffe7b3",
-              boxShadow: "0 6px 32px rgba(0,0,0,.35)",
-            }}
-          >
-            {activeToast.text}
-          </div>
-        </div>
-      )}
-
+      {/* Topbar */}
       <header className={styles.topbar}>
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", width: "100%" }}>
-          <div style={{ display: "flex", alignItems: "center" }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+          <div style={{ display: 'flex', alignItems: 'center' }}>
             <nav className={styles.nav}>
               <a className={styles.navBtn}>Home</a>
               <a className={styles.navBtn}>Station 1</a>
-              <button onClick={() => setDebug((d) => !d)} className={styles.debugBtn}>
-                Debug {debug ? "🔛" : "🔘"}
+              <button onClick={() => setDebug(d => !d)} className={styles.debugBtn}>
+                Debug {debug ? '🔛' : '🔘'}
               </button>
             </nav>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "0.5em" }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5em' }}>
             <div className={styles.status}>
-              <span>
-                Picklist: <span>#{picklistId || "—"}</span>
-              </span>
-              <span style={{ marginLeft: 16 }}>
-                Voortgang: <span>{progress}%</span>
-              </span>
-              <span style={{ marginLeft: 16, color: "#ffd166", fontWeight: 700 }}>{now}</span>
+              {splitMode ? (
+                <div className={styles.statusRow}>
+                  <span>Picklist: <strong>#{picklistId || '—'}</strong></span>
+                  <span className={styles.clock}>{now}</span>
+                </div>
+              ) : (
+                <div className={styles.statusRow}>
+                  <span>Picklist: <strong>#{picklistId || '—'}</strong></span>
+                  <span>Voortgang: <strong>{progress}%</strong></span>
+                  <span>Totaal: <strong>{pickTotals.totalProducts}</strong></span>
+                  <span>Nog te doen: <strong>{pickTotals.todoProducts}</strong></span>
+                  <span className={styles.clock}>{now}</span>
+                </div>
+              )}
+              {!splitMode && (
+                <div className={(styles as any).headerProgress}>
+                  <i style={{ width: `${progress}%` }} />
+                </div>
+              )}
             </div>
             <button
-              onClick={() => signOut({ callbackUrl: "/login" })}
+              onClick={() => signOut({ callbackUrl: '/login' })}
               className={styles.navBtn}
               style={{
-                background: "#222",
-                color: "#ffd166",
+                background: '#222',
+                color: '#ffd166',
                 borderRadius: 8,
-                padding: "6px 16px",
-                border: "1px solid #ffd166",
+                padding: '6px 16px',
+                border: '1px solid #ffd166',
                 fontWeight: 600,
-                cursor: "pointer",
+                cursor: 'pointer',
               }}
             >
               Uitloggen
@@ -857,53 +476,40 @@ export default function HomePage() {
 
       <main className={styles.main}>
         {error ? (
-          <div style={{ textAlign: "center", marginTop: 64, color: "#d33", fontSize: "1.5rem", fontWeight: 500 }}>
+          <div style={{ textAlign: 'center', marginTop: 64, color: '#d33', fontSize: '1.5rem', fontWeight: 500 }}>
             {error}
             <br />
-            <span style={{ fontSize: "1rem", color: "#aaa" }}>Controleer Picqer of probeer opnieuw...</span>
+            <span style={{ fontSize: '1rem', color: '#aaa' }}>Controleer Picqer of probeer opnieuw…</span>
           </div>
-        ) : activeBatches.length >= 2 ? (
+        ) : splitMode ? (
           <div className={styles.splitWrap}>
             <section className={styles.splitPaneTop}>
-              {renderBatchMini(activeBatches[0], styles, miniFx[activeBatches[0].batchId], debug)}
+              <RenderBatchMini b={batches[0]} fx={miniFx[batches[0].batchId]} debug={debug} />
             </section>
             <section className={styles.splitPaneBottom}>
-              {renderBatchMini(activeBatches[1], styles, miniFx[activeBatches[1].batchId], debug)}
+              <RenderBatchMini b={batches[1]} fx={miniFx[batches[1].batchId]} debug={debug} />
             </section>
           </div>
         ) : currentProduct ? (
           <div className={styles.singleWrap}>
             <div className={styles.card}>
-              {/* (1) Picklist samenvatting BOVENIN */}
-              <div className={styles.summaryTop}>
-                Picklist totaal: {pickTotals.totalProducts} producten
-                <br />
-                Nog te doen: {pickTotals.todoProducts}
-                <div className={styles.progressBar}>
-                  <div style={{ width: `${progress}%` }} />
-                </div>
-              </div>
-
-              {/* (2) Grote locatie */}
-              <h1 className={styles.location} style={{ marginTop: 0, marginBottom: "0.2em" }}>
-                <span
-                  className={`${styles.locBox} ${showLocAnim ? styles.locPulse : ""}`}
-                  style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "block" }}
-                >
-                  {currentProduct ? (currentProduct.stocklocation || currentProduct.stock_location || "—") : "—"}
+              {/* Locatie */}
+              <h1 className={styles.location} style={{ marginTop: 0, marginBottom: '0.2em' }}>
+                <span className={styles.locBox}>
+                  {currentProduct ? (currentProduct.stocklocation || currentProduct.stock_location || '—') : '—'}
                 </span>
               </h1>
 
-              {/* (3) Foto boven de productnaam */}
+              {/* Foto */}
               <ProductImage
                 item={currentProduct}
-                max={220}
+                max={200}
                 radius={14}
-                alt={currentProduct?.product || currentProduct?.name || "Productfoto"}
+                alt={currentProduct?.product || currentProduct?.name || 'Productfoto'}
                 debugSwitch={debug}
               />
 
-              {/* (4) Productnaam + SKU */}
+              {/* Naam + SKU */}
               <div className={styles.meta}>
                 <div className={styles.productName}>
                   {currentProduct
@@ -912,41 +518,38 @@ export default function HomePage() {
                       currentProduct.title ||
                       currentProduct.omschrijving ||
                       currentProduct.description ||
-                      ""
-                    : data.product || ""}
+                      ''
+                    : ''}
                 </div>
                 <div className={styles.sku}>
-                  SKU: <span style={{ fontFamily: "ui-monospace" }}>{sku}</span>
+                  SKU: <span style={{ fontFamily: 'ui-monospace' }}>{sku}</span>
                 </div>
               </div>
 
-              {/* (5) Stats + (6) Volgende locaties) blijven zoals ze waren */}
+              {/* Stats */}
               <div className={styles.stats}>
                 <div>
-                  <div className={`${styles.statValue} ${showPickedAnim ? styles.bumpFlash : ""}`}>
-                    {currentProduct ? (currentProduct.amountpicked ?? currentProduct.amount_picked ?? 0) : done}
-                  </div>
+                  <div className={styles.statValue}>{done}</div>
                   <div className={styles.statLabel}>Gedaan</div>
                 </div>
                 <div>
-                  <div className={styles.statValue}>
-                    {currentProduct ? currentProduct.amount ?? 0 : total}
-                  </div>
+                  <div className={styles.statValue}>{total}</div>
                   <div className={styles.statLabel}>Totaal</div>
                 </div>
               </div>
 
+              {/* Volgende locaties */}
               {nextLocations && nextLocations.length > 0 && (
                 <div className={styles.nextSection}>
-                  <div className={styles.nextTitle}>
-                    Volgende locaties:
-                  </div>
-                  <div className={styles.nextGrid}>
-                    {nextLocations.map((loc, i) => (
-                      <div key={loc + String(i)} className={styles.badgeBig}>
-                        {loc}
-                      </div>
-                    ))}
+                  <div className={styles.nextTitle}>Volgende locaties:</div>
+                  <div className={(styles as any).nextScroll}>
+                    <div className={styles.nextGrid}>
+                      {nextLocations.map((loc, i) => (
+                        <div key={loc + String(i)} className={styles.badgeBig}>
+                          {loc}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
               )}
@@ -955,25 +558,25 @@ export default function HomePage() {
                 <pre
                   style={{
                     marginTop: 32,
-                    background: "#121214",
+                    background: '#121214',
                     borderRadius: 16,
                     padding: 16,
                     fontSize: 12,
                     maxWidth: 600,
-                    overflowX: "auto",
-                    border: "1px solid #2a2a2e",
+                    overflowX: 'auto',
+                    border: '1px solid #2a2a2e',
                   }}
                 >
-                  {debugText}
+                  {JSON.stringify({ currentProduct, items: dataItems.slice(0, 3) }, null, 2)}
                 </pre>
               )}
             </div>
           </div>
         ) : (
-          <div style={{ textAlign: "center", marginTop: 64, color: "#888", fontSize: "1.5rem", fontWeight: 500 }}>
+          <div style={{ textAlign: 'center', marginTop: 64, color: '#888', fontSize: '1.5rem', fontWeight: 500 }}>
             Geen actieve batch of pickdata gevonden.
             <br />
-            <span style={{ fontSize: "1rem", color: "#aaa" }}>Wacht op een nieuwe batch in Picqer...</span>
+            <span style={{ fontSize: '1rem', color: '#aaa' }}>Wacht op een nieuwe batch in Picqer…</span>
           </div>
         )}
       </main>
