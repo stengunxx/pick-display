@@ -1,4 +1,5 @@
 // ...existing code...
+// ...existing code...
 import React, { useEffect, useState, useRef, startTransition } from "react";
 import { signOut } from "next-auth/react";
 import styles from "../styles/PickDisplay.module.css";
@@ -28,20 +29,43 @@ type PickData = {
   done?: boolean;
 };
 
-type MiniFx = Record<string | number, { locPulse: boolean; bump: boolean }>;
+type MiniFx = Record<string | number, { locPulse: boolean; bump: boolean; newPick?: boolean }>;
 
 /* ========== MINI CARD ========== */
 function renderBatchMini(
   b: BatchView,
   styles: any,
-  fx?: { locPulse?: boolean; bump?: boolean }
+  fx?: { locPulse?: boolean; bump?: boolean; newPick?: boolean }
 ) {
   if (!b) return null;
   const cur = b.currentProduct;
   const loc = cur ? cur.stocklocation || cur.stock_location || "—" : "—";
   return (
     <div className={styles.panel}>
-      <div className={styles.panelCard}>
+      <div className={styles.panelCard} style={{ position: "relative" }}>
+        {/* per-kaart badge */}
+        {fx?.newPick && (
+          <div
+            style={{
+              position: "absolute",
+              top: -10,
+              left: "50%",
+              transform: "translateX(-50%)",
+              background: "#ffd166",
+              color: "#222",
+              fontWeight: 800,
+              fontSize: "1.0rem",
+              padding: "0.35rem 1rem",
+              borderRadius: "1rem",
+              border: "2px solid #ffe7b3",
+              boxShadow: "0 6px 24px rgba(0,0,0,.35)",
+              zIndex: 2,
+              pointerEvents: "none",
+            }}
+          >
+            Nieuwe picklist!
+          </div>
+        )}
         <div className={styles.panelTitle}>
           Batch #{String(b.batchId)} • Voortgang: {b.progress}%
         </div>
@@ -72,6 +96,7 @@ function renderBatchMini(
             <div className={styles.statLabel}>Totaal</div>
           </div>
         </div>
+
         {Array.isArray(b.nextLocations) && b.nextLocations.length > 0 && (
           <div className={styles.nextSplit}>
             <div className={styles.nextSplitTitle}>Volgende locaties:</div>
@@ -91,6 +116,52 @@ function renderBatchMini(
 
 /* ========== PAGE ========== */
 export default function HomePage() {
+  // per-mini picklist-key en timers voor de badge
+  const miniPickKeyRef = useRef<Record<string | number, string>>({});
+  const miniPickTimerRef = useRef<Record<string | number, number>>({});
+
+  function markMiniNewPick(id: string | number) {
+    setMiniFx((curr: MiniFx) => ({ ...curr, [id]: { ...(curr[id] || { locPulse:false, bump:false }), newPick: true } }));
+    if (miniPickTimerRef.current[id]) clearTimeout(miniPickTimerRef.current[id]);
+    miniPickTimerRef.current[id] = window.setTimeout(() => {
+      setMiniFx((curr: MiniFx) => ({ ...curr, [id]: { ...(curr[id] || {}), newPick: false } }));
+    }, 1600);
+  }
+  // — Nieuw: picklist-key voor betrouwbare detectie
+  const prevPickKeyRef = useRef<string | null>(null);
+  const pickKeyInitRef = useRef(false);
+
+  function getPicklistKey(v: BatchView & { items?: any[] }) {
+    const cp = v.currentProduct || {};
+    // 1) probeer echte id-velden op meerdere plaatsen/benamingen
+    const hardId =
+      cp.picklist_id ??
+      cp.picklistId ??
+      cp.picklist?.id ??
+      (v as any).picklist_id ??
+      (v as any).picklistId;
+    if (hardId != null && hardId !== "") return `id:${String(hardId)}`;
+
+    // 2) fallback: signature op basis van de eerste ~8 items (sku/productcode/id)
+    const items = Array.isArray(v.items) ? v.items : [];
+    const sig = items
+      .slice(0, 8)
+      .map((it: any) =>
+        String(
+          it.picklist_id ??
+            it.picklistId ??
+            it.picklist?.id ??
+            it.productcode ??
+            it.sku ??
+            it.id ??
+            it.product_id ??
+            ""
+        )
+      )
+      .join("|");
+
+    return `sig:${sig}`;
+  }
   // Detectie picklist-wissel (ook binnen dezelfde batch)
   const prevPicklistIdRef = useRef<string | number | null>(null);
   // ----- UI state -----
@@ -202,7 +273,9 @@ export default function HomePage() {
         const sigIds = Array.from(new Set(ids.map(String))).sort().join(",");
 
         // Nieuwe batch-set (bijv. batch toegevoegd/verwijderd)
-        if (prevBatchIdsRef.current && prevBatchIdsRef.current !== sigIds) {
+        const prevIdsArr = prevBatchIdsRef.current ? prevBatchIdsRef.current.split(",") : [];
+        // Alleen toasten als het aantal batches verandert
+        if (prevBatchIdsRef.current && prevIdsArr.length !== ids.length) {
           pushToast("Nieuwe batch!");
         }
         prevBatchIdsRef.current = sigIds;
@@ -269,8 +342,8 @@ export default function HomePage() {
           views.push(common);
           fullViews.push({ ...common, items });
         }
-
-        const active = views.filter(v => v.currentProduct);
+        // Definieer active direct na views/fullViews
+        const active: BatchView[] = views.filter(v => v.currentProduct);
 
         // split-view animaties (loc-wissel / done↑) per batch
         setMiniFx(prevFx => {
@@ -293,9 +366,33 @@ export default function HomePage() {
           }
           // opruimen voor verdwenen batches
           Object.keys(nextFx).forEach(k => {
-            if (!active.some(v => String(v.batchId) === String(k))) delete nextFx[k as any];
+            if (!active.some((v: BatchView) => String(v.batchId) === String(k))) delete nextFx[k as any];
           });
           return nextFx;
+        });
+
+        // Per-mini picklist-wissel badge
+        for (const v of active) {
+          const id = v.batchId;
+          // pak de "full" variant om items mee te nemen voor de key
+          const full = fullViews.find((x: BatchView) => String(x.batchId) === String(id)) || v;
+          const newKey = getPicklistKey(full);
+
+          if (miniPickKeyRef.current[id] && miniPickKeyRef.current[id] !== newKey) {
+            // deze mini-kaart is naar een nieuwe picklist gesprongen → badge tonen
+            markMiniNewPick(id);
+          }
+          miniPickKeyRef.current[id] = newKey;
+        }
+        // opruimen (verdwenen mini’s)
+        Object.keys(miniPickKeyRef.current).forEach(k => {
+          if (!active.some((v: BatchView) => String(v.batchId) === String(k))) {
+            delete miniPickKeyRef.current[k];
+            if (miniPickTimerRef.current[k]) {
+              clearTimeout(miniPickTimerRef.current[k]);
+              delete miniPickTimerRef.current[k];
+            }
+          }
         });
 
         // lijst-state
@@ -306,31 +403,20 @@ export default function HomePage() {
         // primary + picklist-wissel-toast
         const primaryLite = active[0] || null;
         if (primaryLite) {
-          const newPrimaryKey = String(primaryLite.batchId ?? "");
-          if (debug && prevPrimaryKeyRef.current !== newPrimaryKey) {
-            console.log("[primary picklist change]", prevPrimaryKeyRef.current, "→", newPrimaryKey, { primaryLite });
-          }
-          if (initPrimaryRef.current && prevPrimaryKeyRef.current && newPrimaryKey &&
-              prevPrimaryKeyRef.current !== newPrimaryKey) {
-            pushToast("Nieuwe picklist!");
-          }
-          prevPrimaryKeyRef.current = newPrimaryKey;
-          initPrimaryRef.current = true;
-
           const primaryFull = fullViews.find(v => v.batchId === primaryLite.batchId) || primaryLite;
-          // Detecteer picklist-wissel
-          const currentPicklistId =
-            primaryFull?.currentProduct?.picklistId ??
-            primaryFull?.currentProduct?.picklist_id ??
-            null;
-          if (
-            prevPicklistIdRef.current &&
-            currentPicklistId &&
-            prevPicklistIdRef.current !== currentPicklistId
-          ) {
-            pushToast("Nieuwe picklist!");
+          // Betrouwbare detectie van picklist-wissel (ook binnen dezelfde batch)
+          const newPickKey = getPicklistKey(primaryFull);
+          const isSingleView = active.length === 1;
+          if (isSingleView) {
+            if (pickKeyInitRef.current) {
+              if (prevPickKeyRef.current && newPickKey && prevPickKeyRef.current !== newPickKey) {
+                pushToast("Nieuwe picklist!");
+              }
+            } else {
+              pickKeyInitRef.current = true; // eerste tick niet toasten
+            }
           }
-          prevPicklistIdRef.current = currentPicklistId;
+          prevPickKeyRef.current = newPickKey;
           startTransition(() => updatePrimaryIfChanged(primaryFull));
         }
 
