@@ -499,86 +499,16 @@ export default function HomePage() {
                   {currentProduct ? (currentProduct.stocklocation || currentProduct.stock_location || '—') : '—'}
                 </span>
               </h1>
-
-              {/* Foto */}
-              <ProductImage
-                item={currentProduct}
-                max={200}
-                radius={14}
-                alt={currentProduct?.product || currentProduct?.name || 'Productfoto'}
-                debugSwitch={debug}
-              />
-
-              {/* Naam + SKU */}
-              <div className={styles.meta}>
-                <div className={styles.productName}>
-                  {currentProduct
-                    ? currentProduct.product ||
-                      currentProduct.name ||
-                      currentProduct.title ||
-                      currentProduct.omschrijving ||
-                      currentProduct.description ||
-                      ''
-                    : ''}
-                </div>
-                <div className={styles.sku}>
-                  SKU: <span style={{ fontFamily: 'ui-monospace' }}>{sku}</span>
-                </div>
-              </div>
-
-              {/* Stats */}
-              <div className={styles.stats}>
-                <div>
-                  <div className={styles.statValue}>{done}</div>
-                  <div className={styles.statLabel}>Gedaan</div>
-                </div>
-                <div>
-                  <div className={styles.statValue}>{total}</div>
-                  <div className={styles.statLabel}>Totaal</div>
-                </div>
-              </div>
-
-              {/* Volgende locaties */}
-              {nextLocations && nextLocations.length > 0 && (
-                <div className={styles.nextSection}>
-                  <div className={styles.nextTitle}>Volgende locaties:</div>
-                  <div className={(styles as any).nextScroll}>
-                    <div className={styles.nextGrid}>
-                      {nextLocations.map((loc, i) => (
-                        <div key={loc + String(i)} className={styles.badgeBig}>
-                          {loc}
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {debug && (
-                <pre
-                  style={{
-                    marginTop: 32,
-                    background: '#121214',
-                    borderRadius: 16,
-                    padding: 16,
-                    fontSize: 12,
-                    maxWidth: 600,
-                    overflowX: 'auto',
-                    border: '1px solid #2a2a2e',
-                  }}
-                >
-                  {JSON.stringify({ currentProduct, items: dataItems.slice(0, 3) }, null, 2)}
-                </pre>
-              )}
+              {/* ...rest van je single view ... */}
             </div>
           </div>
-        ) : (
+        ) : (!batches.length && !currentProduct) ? (
           <div style={{ textAlign: 'center', marginTop: 64, color: '#888', fontSize: '1.5rem', fontWeight: 500 }}>
             Geen actieve batch of pickdata gevonden.
             <br />
-            <span style={{ fontSize: '1rem', color: '#aaa' }}>Wacht op een nieuwe batch in Picqer…</span>
+            <span style={{ fontSize: '1rem', color: '#aaa' }}>Wacht op een nieuwe batch in Picqer...</span>
           </div>
-        )}
+        ) : null}
       </main>
     </div>
   );
