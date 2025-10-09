@@ -187,7 +187,7 @@ function RenderBatchMini(
         )}
 
         <h1 className={styles.locationSplit}>
-          <span className={fx?.locPulse ? styles.locPulse : ''}>{loc}</span>
+            <span className={fx?.locPulse ? styles.locFlash : styles.locBox}>{loc}</span>
         </h1>
 
         <ProductImage
@@ -274,7 +274,8 @@ export default function HomePage() {
   // Ref to track previous picklistId for toast logic
   const prevPicklistIdRef = useRef<string | number>('');
   // Ref om vorige productcodes/skus van batch te onthouden
-  const prevBatchSkusRef = useRef<string[]>([]);
+  // In split mode, store as tuple of arrays: [batchA, batchB]
+  const prevBatchSkusRef = useRef<[string[], string[]] | string[]>([]);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -294,8 +295,16 @@ export default function HomePage() {
       try {
         loaderTimer = setTimeout(() => setLoading(true), 450);
 
-        const bust = `_=${Date.now() % 1e7}`;
-        const j = await fetch(`/api/next-batch?${bust}`, { cache: 'no-store' }).then(r => r.json());
+        // Force cache busting with a random value and also add a timestamp for extra freshness
+        const bust = `_=${Date.now()}&rnd=${Math.random()}&nocache=${Math.random().toString(36).slice(2)}`;
+        const j = await fetch(`/api/next-batch?${bust}`, {
+          cache: 'no-store',
+          headers: {
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+          }
+        }).then(r => r.json());
         const ids: (string | number)[] = Array.isArray(j.batchIds) ? j.batchIds : (j.batchId ? [j.batchId] : []);
 
         if (!ids || ids.length === 0) {
@@ -310,7 +319,14 @@ export default function HomePage() {
         }
 
         const settled = await Promise.allSettled(
-          ids.slice(0, 2).map(id => fetch(`/api/next-pick?batchId=${id}&${bust}`, { cache: 'no-store' }).then(r => r.json()))
+          ids.slice(0, 2).map(id => fetch(`/api/next-pick?batchId=${id}&${bust}`, {
+            cache: 'no-store',
+            headers: {
+              'Cache-Control': 'no-cache, no-store, must-revalidate',
+              'Pragma': 'no-cache',
+              'Expires': '0'
+            }
+          }).then(r => r.json()))
         );
 
         const views: BatchView[] = [];
@@ -362,6 +378,7 @@ export default function HomePage() {
 
         if (unmounted) return;
 
+
         const active = views.filter(v => v.currentProduct);
         const primary = active[0] || null;
 
@@ -396,48 +413,67 @@ export default function HomePage() {
           setPicklistId(String(primary.batchId));
           setProgress(primary.progress);
 
-          // SINGLE view detecties + animaties/toasts
-          const loc = primary.currentProduct.stocklocation ?? primary.currentProduct.stock_location ?? '';
-          const doneVal = primary.done;
-          const skuVal  = primary.sku || '';
-          const batchIdVal = String(primary.batchId);
+          // SPLIT/Single view detecties + animaties/toasts
+          // For split mode, check for new picklist in either batch
+          if (active.length >= 2) {
+            // Compare current SKUs for both batches to previous, store as tuple
+            const currentSkusA = Array.isArray(active[0].items) ? active[0].items.map(it => String(it.productcode ?? it.sku ?? '')) : [];
+            const currentSkusB = Array.isArray(active[1].items) ? active[1].items.map(it => String(it.productcode ?? it.sku ?? '')) : [];
+            let prevTuple: [string[], string[]] = [[], []];
+            if (Array.isArray(prevBatchSkusRef.current) && prevBatchSkusRef.current.length === 2 && Array.isArray(prevBatchSkusRef.current[0]) && Array.isArray(prevBatchSkusRef.current[1])) {
+              prevTuple = prevBatchSkusRef.current as [string[], string[]];
+            }
+            const isNewA = prevTuple[0].length > 0 && currentSkusA.length > 0 && (prevTuple[0] as string[]).join('|') !== currentSkusA.join('|');
+            const isNewB = prevTuple[1].length > 0 && currentSkusB.length > 0 && (prevTuple[1] as string[]).join('|') !== currentSkusB.join('|');
+            if (isNewA || isNewB) {
+              showToast('Nieuwe picklijst');
+            }
+            // Store tuple for next comparison
+            prevBatchSkusRef.current = [currentSkusA, currentSkusB];
+          } else {
+            // Single view logic
+            const loc = primary.currentProduct.stocklocation ?? primary.currentProduct.stock_location ?? '';
+            const doneVal = primary.done;
+            const skuVal  = primary.sku || '';
+            const batchIdVal = String(primary.batchId);
 
-          // locatie wissel → zachte glow (geen toast)
-          if (prevLocRef.current && prevLocRef.current !== loc) {
-            setSingleFx(s => ({ ...s, locPulse: true }));
-            setTimeout(() => setSingleFx(s => ({ ...s, locPulse: false })), 520);
+            // locatie wissel → zachte glow (geen toast)
+            if (prevLocRef.current && prevLocRef.current !== loc) {
+              setSingleFx(s => ({ ...s, locPulse: true }));
+              setTimeout(() => setSingleFx(s => ({ ...s, locPulse: false })), 520);
+            }
+            prevLocRef.current = loc;
+
+            // done toename → kleine pop animatie + groen
+            if (prevDoneRef.current >= 0 && doneVal > prevDoneRef.current) {
+              setSingleFx(s => ({ ...s, bump: true }));
+              setTimeout(() => setSingleFx(s => ({ ...s, bump: false })), 240);
+            }
+            prevDoneRef.current = doneVal;
+
+            // batchId verandering → nieuwe picklijst toast
+            const currentSkus = Array.isArray(primary.items)
+              ? primary.items.map(it => String(it.productcode ?? it.sku ?? ''))
+              : [];
+            const prevSkus = prevBatchSkusRef.current;
+            const isNewPicklist = prevSkus.length > 0 && currentSkus.length > 0 && (
+              prevSkus.join('|') !== currentSkus.join('|')
+            );
+            if (isNewPicklist) {
+              showToast('Nieuwe picklijst');
+            }
+            prevBatchSkusRef.current = currentSkus;
+
+            prevSkuRef.current = skuVal;
+
+            // update single data
+            setCurrentProduct(primary.currentProduct);
+            setDataItems(Array.isArray(primary.items) ? primary.items : []);
+            setSku(primary.sku);
+            setDone(primary.done);
+            setTotal(primary.total);
+            setNextLocations(primary.nextLocations);
           }
-          prevLocRef.current = loc;
-
-          // done toename → kleine pop animatie + groen
-          if (prevDoneRef.current >= 0 && doneVal > prevDoneRef.current) {
-            setSingleFx(s => ({ ...s, bump: true }));
-            setTimeout(() => setSingleFx(s => ({ ...s, bump: false })), 240);
-          }
-          prevDoneRef.current = doneVal;
-
-          // batchId verandering → nieuwe picklijst toast
-          const currentSkus = Array.isArray(primary.items)
-            ? primary.items.map(it => String(it.productcode ?? it.sku ?? ''))
-            : [];
-          const prevSkus = prevBatchSkusRef.current;
-          const isNewPicklist = prevSkus.length > 0 && currentSkus.length > 0 && (
-            prevSkus.join('|') !== currentSkus.join('|')
-          );
-          if (isNewPicklist) {
-            showToast('Nieuwe picklijst');
-          }
-          prevBatchSkusRef.current = currentSkus;
-
-          prevSkuRef.current = skuVal;
-
-          // update single data
-          setCurrentProduct(primary.currentProduct);
-          setDataItems(Array.isArray(primary.items) ? primary.items : []);
-          setSku(primary.sku);
-          setDone(primary.done);
-          setTotal(primary.total);
-          setNextLocations(primary.nextLocations);
         } else {
           // tijdelijk leeg → behoud laatste goede view
           emptyTicksRef.current += 1;
@@ -454,7 +490,7 @@ export default function HomePage() {
 
     const loop = async () => {
       await fetchOnce();
-      if (!unmounted) timer = setTimeout(loop, 200);
+      if (!unmounted) timer = setTimeout(loop, 100);
     };
 
     loop();
