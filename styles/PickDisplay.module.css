@@ -3,6 +3,84 @@
   --accent-weak:#ffe7b3;
   --surface:#151518;
   --ring:#3a3a42;
+  --success: #36d399;
+  --success-ink: #041f15;
+  --success-glow: color-mix(in oklab, var(--success) 20%, transparent);
+}
+
+/* Single mode pill */
+.statPill{
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  gap: 4px;
+  padding: .35em .8em;
+  border-radius: 12px;
+  line-height: 1.05;
+  isolation: isolate;
+}
+.pillFlash::before{
+  content:"";
+  position:absolute;
+  inset:-4px;
+  border-radius: 14px;
+  z-index:-1;
+  background:
+    linear-gradient(180deg,
+      color-mix(in oklab, var(--success) 92%, white 0%) 0%,
+      color-mix(in oklab, var(--success) 70%, transparent 30%) 100%
+    );
+  box-shadow: 0 6px 20px var(--success-glow);
+  opacity:0;
+  transform: scale(.985);
+  animation: pillIn 1s ease-out forwards;
+}
+@keyframes pillIn{
+  0%   { opacity: 0;   transform: scale(.985); }
+  12%  { opacity: .95; transform: scale(1); }
+  100% { opacity: 0;   transform: scale(1.01); }
+}
+
+/* Split mode pill */
+.metaPill{
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: .35em;
+  padding: .25em .6em;
+  border-radius: 10px;
+  isolation: isolate;
+  width: max-content;
+}
+.pillFlashSm::before{
+  content:"";
+  position:absolute;
+  inset:-3px;
+  border-radius: 12px;
+  z-index:-1;
+  background:
+    linear-gradient(180deg,
+      color-mix(in oklab, var(--success) 88%, white 0%) 0%,
+      color-mix(in oklab, var(--success) 60%, transparent 40%) 100%
+    );
+  box-shadow: 0 4px 16px var(--success-glow);
+  opacity:0;
+  transform: scale(.99);
+  animation: pillInSm 1s ease-out forwards;
+}
+@keyframes pillInSm{
+  0%   { opacity: 0;   transform: scale(.99); }
+  15%  { opacity: .9;  transform: scale(1); }
+  100% { opacity: 0;   transform: scale(1.008); }
+}
+
+/* Subtielere label in pill */
+.statPill .statLabel { opacity:.9; }
+.root{
+  --accent:#ffd166;
+  --accent-weak:#ffe7b3;
+  --surface:#151518;
+  --ring:#3a3a42;
   .imageWell{
     display:inline-flex; align-items:center; justify-content:center;
     padding:10px; border:2px solid var(--ring); border-radius:18px;
@@ -61,7 +139,8 @@
   font-weight: 700;
   font-size: 1rem;
   padding: .55rem 1rem .55rem 1.1rem;
-  border-radius: 12px;
+  border-radius: 6px;
+  padding: 6px 18px 6px 18px;
   border: 1px solid #2a2a2e;
   box-shadow: 0 6px 24px rgba(0,0,0,.35);
   opacity: 0; transform: translateY(-8px);
@@ -180,6 +259,42 @@
   color:var(--muted); 
   font-size:.82rem; 
   margin-top:4px;
+}
+/* Green highlight for 'Gedaan' bump (single) */
+.doneFlash {
+  position: relative;
+  isolation: isolate;
+}
+.doneFlash::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: #27ae60;
+  border-radius: 12px;
+  opacity: 0.85;
+  animation: doneBgFlash 1s cubic-bezier(.4,0,.2,1);
+}
+@keyframes doneBgFlash {
+  0% { opacity: 0.85; }
+  80% { opacity: 0.85; }
+  100% { opacity: 0; }
+}
+
+/* Green highlight for 'Gedaan' bump (split) */
+.doneFlashSm {
+  position: relative;
+  isolation: isolate;
+}
+.doneFlashSm::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: #27ae60;
+  border-radius: 8px;
+  opacity: 0.85;
+  animation: doneBgFlash 1s cubic-bezier(.4,0,.2,1);
 }
 
 /* Volgende locaties (single) */
@@ -324,9 +439,6 @@
 }
 @keyframes locPing{ 0%{transform:scale(1)} 45%{transform:scale(1.02)} 100%{transform:scale(1)} }
 
-/* done bump */
-@keyframes bump { 0%{transform:scale(1)} 40%{transform:scale(1.08)} 100%{transform:scale(1)} }
-.bumpFlash{ animation:bump .22s ease; background:#2ecc40; color:#fff; border-radius:12px; }
 
 /* Compacte header met foto rechts */
 .heroRow {

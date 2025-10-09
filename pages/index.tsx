@@ -198,10 +198,6 @@ function RenderBatchMini(
           </div>
         )}
 
-        <h1 className={styles.locationSplit}>
-            <span className={fx?.locPulse ? styles.locFlash : styles.locBox}>{loc}</span>
-        </h1>
-
         <div className={styles.imageWellSm} style={{ ['--zone' as any]: zoneColor(loc) }}>
           <ProductImage
             item={cur}
@@ -214,7 +210,11 @@ function RenderBatchMini(
         </div>
 
         <div className={(styles as any).metaRow}>
-          <div className={(styles as any).metaLeft}>Gedaan: <b className={fx?.bump ? styles.bumpFlash : ''}>{b.done}</b></div>
+          <div className={(styles as any).metaLeft}>
+            <span className={`${styles.metaPill} ${fx?.bump ? styles.pillFlashSm : ''}`}>
+              Gedaan: <b>{b.done}</b>
+            </span>
+          </div>
           <div className={(styles as any).nameCenter}>
             {b.product}
             <div className={styles.skuSplit}>
@@ -462,7 +462,7 @@ export default function HomePage() {
             // done toename → kleine pop animatie + groen
             if (prevDoneRef.current >= 0 && doneVal > prevDoneRef.current) {
               setSingleFx(s => ({ ...s, bump: true }));
-              setTimeout(() => setSingleFx(s => ({ ...s, bump: false })), 240);
+              setTimeout(() => setSingleFx(s => ({ ...s, bump: false })), 1000);
             }
             prevDoneRef.current = doneVal;
 
@@ -645,8 +645,8 @@ export default function HomePage() {
 
               {/* Stats */}
               <div className={styles.stats}>
-                <div>
-                  <div className={`${styles.statValue} ${singleFx.bump ? styles.countPop : ''} ${singleFx.bump ? styles.countGreen : ''}`}>{done}</div>
+                <div className={`${styles.statPill} ${singleFx.bump ? styles.pillFlash : ''}`}>
+                  <div className={`${styles.statValue} ${singleFx.bump ? styles.countPop : ''}`}>{done}</div>
                   <div className={styles.statLabel}>Gedaan</div>
                 </div>
                 <div>
