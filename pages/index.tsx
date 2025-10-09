@@ -514,72 +514,73 @@ export default function HomePage() {
         ) : currentProduct ? (
           <div className={styles.singleWrap}>
             <div className={styles.card}>
-              {/* Locatie */}
-              <h1 className={styles.location} style={{ marginTop: 0, marginBottom: '0.2em' }}>
-                <span
-                  className={styles.locBox}
-                  style={{ ['--zone' as any]: zoneColor(currentProduct?.stocklocation || currentProduct?.stock_location) }}
-                >
-                  <span className={styles.locText}>
-                    {currentProduct ? (currentProduct.stocklocation || currentProduct.stock_location || '—') : '—'}
-                  </span>
-                  <span className={`${styles.locUnderline} ${singleFx.locPulse ? styles.locUnderlineIn : ''}`} />
-                </span>
-              </h1>
+              {/* HERO LOCATIE */}
+              {(() => {
+                const loc = String(currentProduct?.stocklocation ?? currentProduct?.stock_location ?? '—');
+                const segs = loc.split(/[.\s-]+/).filter(Boolean);
+                return (
+                  <div
+                    className={`${styles.heroSingle} ${singleFx.locPulse ? styles.heroSinglePulse : ''}`}
+                    style={{ ['--zone' as any]: zoneColor(loc) }}
+                    aria-label={`Locatie ${loc}`}
+                  >
+                    <span className={styles.zoneBadgeLg}>{zoneOf(loc) || '–'}</span>
+                    <div className={styles.heroSegs}>
+                      {segs.length ? segs.map((s, i) => (
+                        <span key={s + i} className={styles.heroSeg}>{s}</span>
+                      )) : <span className={styles.heroSeg}>—</span>}
+                    </div>
+                  </div>
+                );
+              })()}
 
-              {/* Foto */}
+              {/* FOTO + PROGRESS RING */}
               <div
-                className={`${styles.imageWell} ${singleFx.locPulse ? styles.imageWellPulse : ''}`}
-                style={{ ['--zone' as any]: zoneColor(currentProduct?.stocklocation || currentProduct?.stock_location) }}
+                className={styles.heroImageWrap}
+                style={{
+                  ['--zone' as any]: zoneColor(currentProduct?.stocklocation ?? currentProduct?.stock_location),
+                  ['--prog' as any]: total > 0 ? Math.max(0, Math.min(100, (done / total) * 100)) : 0
+                }}
               >
                 <ProductImage
                   item={currentProduct}
-                  max={220}
-                  radius={12}
+                  max={260}
+                  radius={16}
                   alt={currentProduct?.product || currentProduct?.name || 'Productfoto'}
                   debugSwitch={debug}
                   bare
                 />
               </div>
 
-              {/* Naam + SKU */}
+              {/* NAAM + SKU */}
               <div className={styles.meta}>
-                <div className={styles.productName}>
-                  {currentProduct?.product || currentProduct?.name || currentProduct?.title || currentProduct?.omschrijving || currentProduct?.description || ''}
+                <div className={styles.productName}>{currentProduct?.product || currentProduct?.name || ''}</div>
+                <div className={styles.sku}>SKU: <span style={{ fontFamily: 'ui-monospace' }}>{sku}</span></div>
+              </div>
+
+              {/* STATS */}
+              <div className={styles.statsWide}>
+                <div className={`${styles.statCard} ${singleFx.bump ? styles.statFlash : ''}`}
+                     style={{ ['--zone' as any]: zoneColor(currentProduct?.stocklocation ?? currentProduct?.stock_location) }}>
+                  <div className={styles.statCardValue}>{done}</div>
+                  <div className={styles.statCardLabel}>Gedaan</div>
                 </div>
-                <div className={styles.sku}>
-                  SKU: <span style={{ fontFamily: 'ui-monospace' }}>{sku}</span>
+                <div className={styles.statCardMuted}>
+                  <div className={styles.statCardValue}>{total}</div>
+                  <div className={styles.statCardLabel}>Totaal</div>
                 </div>
               </div>
 
-              {/* Stats */}
-              <div className={styles.stats}>
-                <div className={`${styles.statPill} ${singleFx.bump ? styles.pillFlash : ''}`}>
-                  <div className={`${styles.statValue} ${singleFx.bump ? styles.countPop : ''}`}>{done}</div>
-                  <div className={styles.statLabel}>Gedaan</div>
-                </div>
-                <div>
-                  <div className={styles.statValue}>{total}</div>
-                  <div className={styles.statLabel}>Totaal</div>
-                </div>
-              </div>
-
-              {/* Volgende locaties */}
-              {nextLocations && nextLocations.length > 0 && (
+              {/* VOLGENDE LOCATIES */}
+              {nextLocations?.length > 0 && (
                 <div className={styles.nextSection}>
                   <div className={styles.nextTitle}>Volgende locaties:</div>
-                  <div className={(styles as any).nextScroll}>
-                    <div className={styles.nextGrid}>
-                      {nextLocations.map((loc, i) => (
-                        <div
-                          key={loc + String(i)}
-                          className={styles.badgeBig}
-                          style={{ ['--zone' as any]: zoneColor(loc) }}
-                        >
-                          {loc}
-                        </div>
-                      ))}
-                    </div>
+                  <div className={styles.nextGrid}>
+                    {nextLocations.map((L, i) => (
+                      <div key={L + i} className={styles.badgeBig} style={{ ['--zone' as any]: zoneColor(L) }}>
+                        {L}
+                      </div>
+                    ))}
                   </div>
                 </div>
               )}
