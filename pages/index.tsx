@@ -1,4 +1,14 @@
+
 'use client';
+// ===== ZONE HELPERS =====
+const ZONE_TINTS: Record<string,string> = {
+  A: '#4FC3F7', // lichtblauw
+  B: '#B39DDB', // paars
+  C: '#80CBC4', // mint
+  D: '#FFD166', // fallback oranje
+};
+function zoneOf(loc?: string){ const m = (loc||'').trim().match(/^([A-Za-z])/); return m ? m[1].toUpperCase() : 'D'; }
+function zoneColor(loc?: string){ return ZONE_TINTS[zoneOf(loc)] || ZONE_TINTS.D; }
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { signOut } from 'next-auth/react';
@@ -81,8 +91,8 @@ async function selectFirstReachable(urls: string[]): Promise<string> {
   return '';
 }
 
-type ProductImageProps = { item: any; max?: number; radius?: number; alt?: string; debugSwitch?: boolean; };
-function ProductImage({ item, max = 200, radius = 12, alt = 'Productfoto', debugSwitch }: ProductImageProps) {
+type ProductImageProps = { item: any; max?: number; radius?: number; alt?: string; debugSwitch?: boolean; bare?: boolean; };
+function ProductImage({ item, max = 200, radius = 12, alt = 'Productfoto', debugSwitch, bare }: ProductImageProps) {
   const [url, setUrl] = useState('');
   const [tried, setTried] = useState<string[]>([]);
   const candidates = useMemo(() => getImageCandidates(item), [item]);
@@ -130,8 +140,10 @@ function ProductImage({ item, max = 200, radius = 12, alt = 'Productfoto', debug
         maxWidth: max, maxHeight: max,
         objectFit: 'contain',
         borderRadius: radius,
-        boxShadow: '0 2px 16px rgba(0,0,0,.2)',
-        background: '#111', padding: 8, margin: '0 auto', display: 'block'
+        background: bare ? 'transparent' : '#111',
+        padding: bare ? 0 : 8,
+        boxShadow: bare ? 'none' : '0 2px 16px rgba(0,0,0,.2)',
+        margin: '0 auto', display: 'block'
       }}
     />
   );
@@ -190,13 +202,16 @@ function RenderBatchMini(
             <span className={fx?.locPulse ? styles.locFlash : styles.locBox}>{loc}</span>
         </h1>
 
-        <ProductImage
-          item={cur}
-          max={64}
-          radius={8}
-          alt={cur?.product || cur?.name || 'Productfoto'}
-          debugSwitch={!!debug}
-        />
+        <div className={styles.imageWellSm} style={{ ['--zone' as any]: zoneColor(loc) }}>
+          <ProductImage
+            item={cur}
+            max={56}
+            radius={8}
+            alt={cur?.product || cur?.name || 'Productfoto'}
+            debugSwitch={!!debug}
+            bare
+          />
+        </div>
 
         <div className={(styles as any).metaRow}>
           <div className={(styles as any).metaLeft}>Gedaan: <b className={fx?.bump ? styles.bumpFlash : ''}>{b.done}</b></div>
@@ -513,7 +528,7 @@ export default function HomePage() {
     <div className={styles.root}>
       {/* Toast (single mode) */}
       {!splitMode && toast && (
-        <div className={styles.toastWrap}>
+        <div className={styles.toastWrap} aria-live="polite" aria-atomic="true">
           <div className={styles.toastBubble}>{toast.text}</div>
         </div>
       )}
@@ -592,19 +607,31 @@ export default function HomePage() {
             <div className={styles.card}>
               {/* Locatie */}
               <h1 className={styles.location} style={{ marginTop: 0, marginBottom: '0.2em' }}>
-                <span className={singleFx.locPulse ? styles.locFlash : styles.locBox}>
-                  {currentProduct ? (currentProduct.stocklocation || currentProduct.stock_location || '—') : '—'}
+                <span
+                  className={styles.locBox}
+                  style={{ ['--zone' as any]: zoneColor(currentProduct?.stocklocation || currentProduct?.stock_location) }}
+                >
+                  <span className={styles.locText}>
+                    {currentProduct ? (currentProduct.stocklocation || currentProduct.stock_location || '—') : '—'}
+                  </span>
+                  <span className={`${styles.locUnderline} ${singleFx.locPulse ? styles.locUnderlineIn : ''}`} />
                 </span>
               </h1>
 
               {/* Foto */}
-              <ProductImage
-                item={currentProduct}
-                max={200}
-                radius={14}
-                alt={currentProduct?.product || currentProduct?.name || 'Productfoto'}
-                debugSwitch={debug}
-              />
+              <div
+                className={`${styles.imageWell} ${singleFx.locPulse ? styles.imageWellPulse : ''}`}
+                style={{ ['--zone' as any]: zoneColor(currentProduct?.stocklocation || currentProduct?.stock_location) }}
+              >
+                <ProductImage
+                  item={currentProduct}
+                  max={220}
+                  radius={12}
+                  alt={currentProduct?.product || currentProduct?.name || 'Productfoto'}
+                  debugSwitch={debug}
+                  bare
+                />
+              </div>
 
               {/* Naam + SKU */}
               <div className={styles.meta}>
@@ -635,7 +662,11 @@ export default function HomePage() {
                   <div className={(styles as any).nextScroll}>
                     <div className={styles.nextGrid}>
                       {nextLocations.map((loc, i) => (
-                        <div key={loc + String(i)} className={styles.badgeBig}>
+                        <div
+                          key={loc + String(i)}
+                          className={styles.badgeBig}
+                          style={{ ['--zone' as any]: zoneColor(loc) }}
+                        >
                           {loc}
                         </div>
                       ))}
