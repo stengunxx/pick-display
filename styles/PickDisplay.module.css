@@ -1,3 +1,208 @@
+
+/* --- HERO locatiebalk ----------------------------------------------------- */
+.heroLoc{
+  display:flex; align-items:center; justify-content:center; gap:.5em;
+  padding:.25em .8em;
+  border-radius:20px;
+  background: linear-gradient(180deg,
+    color-mix(in oklab, var(--zone, var(--accent)) 14%, #131315 86%),
+    #0f1012);
+  border:1.5px solid color-mix(in oklab, var(--zone, var(--accent)) 55%, #2a2a2e 45%);
+  box-shadow: 0 10px 30px rgba(0,0,0,.40), inset 0 1px 0 rgba(255,255,255,.04);
+  margin-bottom:10px;
+}
+.heroLocPulse{
+  box-shadow:
+    0 10px 30px rgba(0,0,0,.40),
+    0 0 0 14px color-mix(in oklab, var(--zone, var(--accent)) 20%, transparent 80%),
+    inset 0 1px 0 rgba(255,255,255,.06);
+  animation: heroPulse .55s ease-out 1;
+}
+@keyframes heroPulse{ 0%{transform:scale(1)} 40%{transform:scale(1.012)} 100%{transform:scale(1)} }
+
+.zoneBadge{
+  width:44px; height:44px; display:grid; place-items:center;
+  border-radius:12px; font-weight:1000; color:#0b0d0c;
+  background: color-mix(in oklab, var(--zone, var(--accent)) 80%, white 0%);
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--zone, var(--accent)) 50%, #000 50%);
+}
+
+.locSegWrap{ display:flex; flex-wrap:wrap; gap:.18em; align-items:baseline; }
+.locSeg{
+  font-weight:1000; letter-spacing:.02em; line-height:.88; color:#fff;
+  text-shadow: 0 2px 18px rgba(0,0,0,.6);
+  /* automatisch groot: afhankelijk van hoogte/ breedte */
+  font-size: clamp(3.6rem, 9vh, 12rem);
+}
+.locSeg + .locSeg::before{ content:"·"; margin: 0 .12em; opacity:.55; }
+
+/* Kleine header & body layout onder de hero */
+.miniHeader{ display:grid; grid-template-columns: 1fr 220px; align-items:center; gap:12px; width:100%; }
+.miniTitle{ text-align:center; font-weight:800; color:var(--muted); }
+.miniProgress{ height:8px; border-radius:999px; overflow:hidden; background:#141416; border:1px solid var(--border); }
+.miniProgress i{ height:100%; display:block; background:linear-gradient(90deg,var(--accent),var(--accent-weak)); transition:width .25s ease }
+
+.panelGrid{ display:grid; grid-template-columns: 190px 1fr 220px; gap:18px; align-items:center; padding:8px 6px 10px; }
+.colLeft{ display:grid; justify-items:center; gap:8px }
+.skuBadge{ font-size:.95rem; color:var(--muted); background:#1a1a1e; border:1px solid var(--ring); padding:.3em .7em; border-radius:10px; font-weight:800 }
+.colCenter{ text-align:center; display:grid; gap:8px; justify-items:center }
+.colRight{ display:grid; gap:10px; justify-items:center }
+
+/* Counts rechts */
+.countPill{
+  position:relative; isolation:isolate;
+  display:grid; place-items:center; gap:2px;
+  padding:.5em 1em; border-radius:14px; width:100%; max-width:190px;
+  background:#17171a; border:1px solid #2a2a2e;
+}
+.countPillMuted{ opacity:.9 }
+.countValue{ font-weight:1000; font-size: clamp(1.9rem, 2.8vw, 2.4rem) }
+.countLabel{ text-transform:uppercase; letter-spacing:.12em; font-size:.8rem; color:var(--muted) }
+
+/* Zachte zone-kleur flash ipv felgroen */
+.pillFlashSm::before{
+  content:""; position:absolute; inset:-4px; z-index:-1; border-radius:16px;
+  background: linear-gradient(180deg,
+    color-mix(in oklab, var(--zone, var(--accent)) 88%, white 0%),
+    color-mix(in oklab, var(--zone, var(--accent)) 62%, transparent 38%));
+  box-shadow: 0 8px 24px color-mix(in oklab, var(--zone, var(--accent)) 22%, transparent);
+  opacity:0; transform:scale(.99);
+  animation: pillInSm 1s ease-out forwards;
+}
+@keyframes pillInSm{ 0%{opacity:0;transform:scale(.99)} 15%{opacity:.95;transform:scale(1)} 100%{opacity:0;transform:scale(1.008)} }
+
+/* Responsief fallback */
+@media (max-width: 900px){
+  .panelGrid{ grid-template-columns: 1fr; gap:12px }
+  .colRight{ grid-auto-flow: column; justify-content:center }
+  .miniHeader{ grid-template-columns: 1fr; gap:8px }
+}
+/* Paneel-card iets luxer */
+.panelCard{
+  background: var(--card, rgba(255,255,255,.03));
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 14px 16px 16px;
+  box-shadow: 0 10px 28px rgba(0,0,0,.35), inset 0 1px 0 var(--inner, rgba(255,255,255,.04));
+}
+
+/* Header */
+.miniHeader{
+  display: grid;
+  grid-template-columns: auto 1fr minmax(160px, 28%);
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  margin-bottom: 8px;
+}
+.zoneTag{
+  display:inline-grid; place-items:center;
+  width: 28px; height: 28px; font-weight: 900;
+  border-radius: 8px;
+  color: #0a0d0c;
+  background: color-mix(in oklab, var(--zone, var(--accent)) 75%, #fff 0%);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--zone, var(--accent)) 55%, #000 45%) inset;
+}
+.miniTitle{
+  text-align:center; font-weight: 800; color: var(--muted);
+  display:flex; gap:8px; align-items:center; justify-content:center;
+  font-size: clamp(.95rem,1.6vw,1.05rem);
+}
+.miniTitle span{ opacity:.6 }
+
+.miniProgress{
+  height: 8px; border-radius: 999px; overflow: hidden;
+  background: #141416; border: 1px solid var(--border);
+}
+.miniProgress i{
+  display:block; height:100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-weak));
+  box-shadow: 0 0 20px rgba(255,209,102,.12);
+  transition: width .25s ease;
+}
+
+/* Grid body */
+.panelGrid{
+  display: grid;
+  grid-template-columns: 180px 1fr 220px;
+  gap: 18px;
+  align-items: center;
+  padding: 6px 6px 10px;
+  border-top: 1px dashed #2a2a2e;
+  border-bottom: 1px dashed #2a2a2e;
+  margin: 8px 0 10px;
+}
+.colLeft{ display:grid; justify-items:center; gap:8px }
+.skuBadge{
+  font-size:.85rem; color:var(--muted);
+  background:#1a1a1e; border:1px solid var(--ring);
+  padding:.25em .6em; border-radius:8px; font-weight:700;
+}
+.colCenter{ text-align:center; display:grid; gap:6px; justify-items:center }
+.locBadge{
+  display:inline-flex; align-items:center; gap:8px;
+  background:#1a1a1e; border:1px solid var(--ring);
+  padding:.35em .8em; border-radius:999px; font-weight:800;
+  font-size: clamp(.95rem,1.6vw,1.05rem);
+}
+.locDot{
+  width:10px; height:10px; border-radius:999px;
+  background: color-mix(in oklab, var(--zone, var(--accent)) 70%, #000 30%);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--zone, var(--accent)) 35%, #1a1a1e 65%) inset;
+}
+.colRight{
+  display:grid; gap:10px; justify-items:center;
+}
+
+/* Count pills */
+.countPill{
+  position:relative; isolation:isolate;
+  display:grid; place-items:center; gap:2px;
+  padding:.4em .9em; border-radius:12px; width: 100%;
+  max-width: 180px;
+  background:#17171a; border:1px solid #2a2a2e;
+}
+.countPillMuted{ opacity:.9 }
+.countValue{ font-weight:900; font-size: clamp(1.6rem,2.4vw,2rem) }
+.countLabel{ text-transform:uppercase; letter-spacing:.12em; font-size:.8rem; color:var(--muted) }
+
+/* Flash bij bump (split), hergebruik je bestaande animatie-naam indien gewenst */
+.pillFlashSm::before{
+  content:""; position:absolute; inset:-4px; z-index:-1; border-radius:14px;
+  background:
+    linear-gradient(180deg,
+      color-mix(in oklab, var(--success) 90%, white 0%) 0%,
+      color-mix(in oklab, var(--success) 62%, transparent 38%) 100%
+    );
+  box-shadow: 0 6px 18px var(--success-glow);
+  opacity:0; transform: scale(.99);
+  animation: pillInSm 1s ease-out forwards;
+}
+@keyframes pillInSm{
+  0%{opacity:0; transform:scale(.99)}
+  15%{opacity:.95; transform:scale(1)}
+  100%{opacity:0; transform:scale(1.008)}
+}
+
+/* Chips iets meer zone-accent */
+.chipSmall{
+  border-color: color-mix(in oklab, var(--zone, var(--accent)) 40%, var(--ring) 60%);
+  background: #18181c;
+}
+.chipSmall:hover{
+  transform: translateY(-1px);
+}
+
+/* Responsief */
+@media (max-width: 1000px){
+  .panelGrid{ grid-template-columns: 160px 1fr 180px; gap:14px }
+}
+@media (max-width: 780px){
+  .miniHeader{ grid-template-columns: auto 1fr; }
+  .miniProgress{ grid-column: 1 / -1; }
+  .panelGrid{ grid-template-columns: 1fr; text-align:center; }
+  .colRight{ grid-auto-flow: column; justify-content:center; }
+}
 .root{
   --accent:#ffd166;
   --accent-weak:#ffe7b3;

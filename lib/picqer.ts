@@ -1,3 +1,20 @@
+// Simple zone helpers for location codes
+export function zoneOf(loc: string): string {
+  if (!loc) return '';
+  const m = String(loc).match(/([A-Z])/i);
+  return m ? m[1].toUpperCase() : '';
+}
+
+export function zoneColor(loc: string): string {
+  const zone = zoneOf(loc);
+  switch (zone) {
+    case 'A': return '#6ee7b7'; // mint
+    case 'B': return '#7dd3fc'; // sky
+    case 'C': return '#fbbf24'; // amber
+    case 'D': return '#fca5a5'; // red
+    default: return '#e5e7eb'; // gray
+  }
+}
 const BASE = process.env.PICQER_API_URL!;       // bv. https://.../api/v1
 const KEY  = process.env.PICQER_API_KEY!;
 

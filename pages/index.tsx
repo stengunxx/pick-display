@@ -1,235 +1,143 @@
-
-'use client';
-// ===== ZONE HELPERS =====
-const ZONE_TINTS: Record<string,string> = {
-  A: '#4FC3F7', // lichtblauw
-  B: '#B39DDB', // paars
-  C: '#80CBC4', // mint
-  D: '#FFD166', // fallback oranje
-};
-function zoneOf(loc?: string){ const m = (loc||'').trim().match(/^([A-Za-z])/); return m ? m[1].toUpperCase() : 'D'; }
-function zoneColor(loc?: string){ return ZONE_TINTS[zoneOf(loc)] || ZONE_TINTS.D; }
-
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { signOut } from 'next-auth/react';
-import styles from '../styles/PickDisplay.module.css';
-
-/* ===================== IMAGE HELPERS ===================== */
-
-const EXT_CANDIDATES = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'bmp', 'avif'] as const;
-const probeCache = new Map<string, boolean>();
-
-function stripQuery(u: string) {
-  if (!u) return u;
-  const i = u.indexOf('?');
-  return i >= 0 ? u.slice(0, i) : u;
-}
-function upgradeInsecure(u: string) {
-  if (!u) return '';
-  if (u.startsWith('//')) return (typeof location !== 'undefined' ? location.protocol : 'https:') + u;
-  if (typeof location !== 'undefined' && location.protocol === 'https:' && u.startsWith('http:')) {
-    return u.replace(/^http:/, 'https:');
-  }
-  return u;
-}
-function buildSkuFallbacks(sku: string, tpl: string): string[] {
-  if (!sku || !tpl) return [];
-  const urls: string[] = [];
-  if (tpl.includes('{ext}')) {
-    for (const ext of EXT_CANDIDATES) urls.push(tpl.replace('{sku}', sku).replace('{ext}', ext));
-  } else {
-    const expanded = tpl.replace('{sku}', sku);
-    const noQuery = stripQuery(expanded);
-    const hasKnownExt = /\.(jpg|jpeg|png|webp|gif|bmp|avif)$/i.test(noQuery);
-    if (hasKnownExt) {
-      const base = expanded.replace(/\.(jpg|jpeg|png|webp|gif|bmp|avif)(\?.*)?$/i, '');
-      for (const ext of EXT_CANDIDATES) urls.push(`${base}.${ext}`);
-    } else {
-      urls.push(expanded);
-      for (const ext of EXT_CANDIDATES) urls.push(`${expanded}.${ext}`);
-    }
-  }
-  return urls.map(upgradeInsecure);
-}
-function getImageCandidates(x: any): string[] {
-  if (!x) return [];
-  const fields = [
-    x.image, x.imageUrl, x.image_url, x.imageURL,
-    x.foto, x.afbeelding, x.product_image, x.productImage,
-    x.thumbnail, x.thumb, x.thumbUrl, x.thumb_url,
-    x.productimage, x.product_image_url, x.image_path, x.image_small, x.image_large,
-    x.image?.url, x.image?.src, x.main_image?.url, x.mainImage?.url,
-    x.primary_image?.url, x.primaryImage?.url,
-    x.product?.image, x.product?.imageUrl, x.product?.image_url, x.product?.image?.url,
-    Array.isArray(x.images) ? (x.images[0]?.url ?? x.images[0]?.src ?? x.images[0]) : undefined,
-    Array.isArray(x.media)  ? (x.media[0]?.url  ?? x.media[0]?.src  ?? x.media[0])  : undefined,
-    Array.isArray(x.assets) ? (x.assets[0]?.url ?? x.assets[0]) : undefined,
-    Array.isArray(x.gallery)? (x.gallery[0]?.url ?? x.gallery[0]) : undefined,
-  ].filter(Boolean).map(String).map(upgradeInsecure);
-
-  const sku = x?.productcode ?? x?.sku ?? x?.product?.sku ?? '';
-  const tpl = (typeof process !== 'undefined' && (process as any).env?.NEXT_PUBLIC_IMAGE_BY_SKU_TEMPLATE) || '';
-  const fromSku = sku && tpl ? buildSkuFallbacks(String(sku), String(tpl)) : [];
-
-  const seen = new Set<string>();
-  return [...fields, ...fromSku].filter(u => (seen.has(u) ? false : (seen.add(u), true)));
-}
-function probeImage(url: string): Promise<boolean> {
-  if (!url) return Promise.resolve(false);
-  if (probeCache.has(url)) return Promise.resolve(!!probeCache.get(url));
-  return new Promise<boolean>(resolve => {
-    const img = new Image();
-    img.onload = () => { probeCache.set(url, true); resolve(true); };
-    img.onerror = () => { probeCache.set(url, false); resolve(false); };
-    img.src = url;
-  });
-}
-async function selectFirstReachable(urls: string[]): Promise<string> {
-  for (const u of urls) {
-    if (await probeImage(u)) return u;
-  }
-  return '';
-}
-
-type ProductImageProps = { item: any; max?: number; radius?: number; alt?: string; debugSwitch?: boolean; bare?: boolean; };
-function ProductImage({ item, max = 200, radius = 12, alt = 'Productfoto', debugSwitch, bare }: ProductImageProps) {
-  const [url, setUrl] = useState('');
-  const [tried, setTried] = useState<string[]>([]);
-  const candidates = useMemo(() => getImageCandidates(item), [item]);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setUrl(''); setTried([]);
-      if (!candidates.length) return;
-      setTried(candidates);
-      const found = await selectFirstReachable(candidates);
-      if (!cancelled) setUrl(found);
-    })();
-    return () => { cancelled = true; };
-  }, [candidates.join('|')]);
-
-  if (!url) {
-    if (!debugSwitch) return null;
-    return (
-      <div style={{ textAlign: 'center', marginBottom: 12 }}>
-        <div style={{
-          width: max, height: max, borderRadius: radius,
-          background: '#111', color: '#555', display: 'inline-flex',
-          alignItems: 'center', justifyContent: 'center',
-          fontWeight: 700, fontSize: 12, border: '1px solid #222'
-        }}>
-          geen foto (debug)
-        </div>
-        <div style={{ marginTop: 6, fontSize: 11, color: '#888', maxWidth: 560, marginInline: 'auto', textAlign: 'left', fontFamily: 'ui-monospace' }}>
-          {tried.map((u, i) => <div key={u + i}>{u}</div>)}
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <img
-      key={url}
-      src={url}
-      alt={alt}
-      loading="lazy"
-      decoding="async"
-      referrerPolicy="no-referrer"
-      style={{
-        maxWidth: max, maxHeight: max,
-        objectFit: 'contain',
-        borderRadius: radius,
-        background: bare ? 'transparent' : '#111',
-        padding: bare ? 0 : 8,
-        boxShadow: bare ? 'none' : '0 2px 16px rgba(0,0,0,.2)',
-        margin: '0 auto', display: 'block'
-      }}
-    />
-  );
-}
-
-/* ===================== TYPES & HELPERS ===================== */
-
+// Type definitions for batch view and mini effect state
 type BatchView = {
   batchId: string | number;
-  currentProduct: any | null;
+  currentProduct: any;
   product: string;
   sku: string;
   done: number;
   total: number;
   progress: number;
   nextLocations: string[];
-  items?: any[];
-  totalProducts?: number;
-  todoProducts?: number;
+  items: any[];
+  totalProducts: number;
+  todoProducts: number;
 };
-type MiniFx = Record<string | number, { locPulse: boolean; bump: boolean; newPick?: boolean }>;
+
+type MiniFx = {
+  [batchId: string]: {
+    locPulse?: boolean;
+    bump?: boolean;
+    newPick?: boolean;
+    __loc?: string;
+    __done?: number;
+  };
+};
+
+import React, { useState, useRef, useEffect, useMemo } from 'react';
+
+// Stub for signOut (replace with actual auth logic if needed)
+function signOut({ callbackUrl }: { callbackUrl: string }) {
+  window.location.href = callbackUrl;
+}
+import styles from '../styles/PickDisplay.module.css';
+import { zoneOf, zoneColor } from '../lib/picqer';
+
+// Local stub for ProductImage component
+function ProductImage({ item, max, radius, alt, debugSwitch, bare }: { item: any; max?: number; radius?: number; alt?: string; debugSwitch?: boolean; bare?: boolean }) {
+  // Use enriched image URL if available, fallback to placeholder
+  const url = item?.imageUrl || item?.image_url || item?.image || '';
+  return (
+    <img
+      src={url || '/placeholder.png'}
+      alt={alt || 'Product'}
+      style={{ width: max || 64, height: max || 64, borderRadius: radius || 8, objectFit: 'cover', background: '#eee' }}
+    />
+  );
+}
+
+
+// ...existing helper functions and types...
+
 
 const collator = new Intl.Collator('nl', { numeric: true, sensitivity: 'base' });
 const locOf = (it: any) => (it?.stocklocation ?? it?.stock_location ?? '').toString();
+
 const pickedOf = (it: any) => Number(it?.amountpicked ?? it?.amount_picked ?? 0);
 const totalOf  = (it: any) => Number(it?.amount ?? it?.amount_to_pick ?? 0);
 
 /* ===================== MINI PANEL (split) ===================== */
+
+
 
 function RenderBatchMini(
   { b, fx, debug }: { b: BatchView; fx?: { locPulse?: boolean; bump?: boolean; newPick?: boolean }; debug?: boolean }
 ) {
   if (!b) return null;
   const cur = b.currentProduct;
-  const loc = cur ? (cur.stocklocation || cur.stock_location || '—') : '—';
+  const loc = cur ? String(cur.stocklocation ?? cur.stock_location ?? '—') : '—';
+  const parts = loc.split(/[.\s-]+/).filter(Boolean);
 
   return (
     <div className={styles.panel}>
-      <div className={styles.panelCard} style={{ position: 'relative' }}>
-        <div className={styles.panelTitle}>
-          Batch #{String(b.batchId)} • Voortgang: {b.progress}%
-        </div>
-        <div className={styles.progressMini}>
-          <i style={{ width: `${Math.max(0, Math.min(100, b.progress || 0))}%` }} />
-        </div>
-
-        {typeof b.totalProducts === 'number' && typeof b.todoProducts === 'number' && (
-          <div className={(styles as any).batchInlineTotals}>
-            <span>Nog te doen: <b>{b.todoProducts}</b></span>
-            <span>·</span>
-            <span>Totaal: <b>{b.totalProducts}</b></span>
+      <div className={styles.panelCard}>
+        {/* HERO locatiebalk: groot en in het oog */}
+        <div
+          className={`${styles.heroLoc} ${fx?.locPulse ? styles.heroLocPulse : ''}`}
+          style={{ ['--zone' as any]: zoneColor(loc) }}
+          aria-label={`Locatie ${loc}`}
+        >
+          <span className={styles.zoneBadge}>{zoneOf(loc) || '–'}</span>
+          <div className={styles.locSegWrap}>
+            {parts.length ? parts.map((p, i) => (
+              <span key={p + i} className={styles.locSeg}>{p}</span>
+            )) : <span className={styles.locSeg}>—</span>}
           </div>
-        )}
-
-        <div className={styles.imageWellSm} style={{ ['--zone' as any]: zoneColor(loc) }}>
-          <ProductImage
-            item={cur}
-            max={56}
-            radius={8}
-            alt={cur?.product || cur?.name || 'Productfoto'}
-            debugSwitch={!!debug}
-            bare
-          />
         </div>
 
-        <div className={(styles as any).metaRow}>
-          <div className={(styles as any).metaLeft}>
-            <span className={`${styles.metaPill} ${fx?.bump ? styles.pillFlashSm : ''}`}>
-              Gedaan: <b>{b.done}</b>
-            </span>
+        {/* Header mini met progress */}
+        <div className={styles.miniHeader}>
+          <div className={styles.miniTitle}>
+            Batch #{String(b.batchId)} <span>•</span> Voortgang: {b.progress}%
           </div>
-          <div className={(styles as any).nameCenter}>
-            {b.product}
-            <div className={styles.skuSplit}>
-              SKU: <span style={{ fontFamily: 'ui-monospace' }}>{b.sku}</span>
+          <div className={styles.miniProgress}>
+            <i style={{ width: `${Math.max(0, Math.min(100, b.progress || 0))}%` }} />
+          </div>
+        </div>
+
+        {/* 3-koloms layout */}
+        <div className={styles.panelGrid}>
+          {/* Links: image + SKU */}
+          <div className={styles.colLeft}>
+            <div className={styles.imageWellSm} style={{ ['--zone' as any]: zoneColor(loc) }}>
+              <ProductImage item={cur} max={72} radius={12} alt={cur?.product || cur?.name || 'Productfoto'} debugSwitch={!!debug} bare />
+            </div>
+            <div className={styles.skuBadge}>SKU: <b>{b.sku || '—'}</b></div>
+          </div>
+
+          {/* Midden: product + totals */}
+          <div className={styles.colCenter}>
+            <div className={styles.productNameSplit}>{b.product || '—'}</div>
+            {(typeof b.totalProducts === 'number' && typeof b.todoProducts === 'number') && (
+              <div className={styles.miniTotals}>
+                <span>Nog te doen: <b>{b.todoProducts}</b></span>
+                <span className={styles.dot}>•</span>
+                <span>Totaal: <b>{b.totalProducts}</b></span>
+              </div>
+            )}
+          </div>
+
+          {/* Rechts: counts */}
+          <div className={styles.colRight}>
+            <div className={`${styles.countPill} ${fx?.bump ? styles.pillFlashSm : ''}`}>
+              <div className={styles.countValue}>{b.done}</div>
+              <div className={styles.countLabel}>Gedaan</div>
+            </div>
+            <div className={`${styles.countPill} ${styles.countPillMuted}`}>
+              <div className={styles.countValue}>{b.total}</div>
+              <div className={styles.countLabel}>Totaal</div>
             </div>
           </div>
-          <div className={(styles as any).metaRight}>Totaal: <b>{b.total}</b></div>
         </div>
 
-        {Array.isArray(b.nextLocations) && b.nextLocations.length > 0 && (
-          <div className={(styles as any).nextStrip}>
-            <div className={(styles as any).nextStripTitle}>Volgende locaties</div>
-            <div className={(styles as any).nextStripScroller}>
-              {b.nextLocations.map((L: string, i: number) => (
-                <span key={L + String(i)} className={(styles as any).chipSmall}>{L}</span>
+        {/* Volgende locaties */}
+        {!!b.nextLocations?.length && (
+          <div className={styles.nextStrip}>
+            <div className={styles.nextStripTitle}>Volgende locaties</div>
+            <div className={styles.nextStripScroller}>
+              {b.nextLocations.map((L, i) => (
+                <span key={L + i} className={styles.chipSmall} style={{ ['--zone' as any]: zoneColor(L) }}>
+                  {L}
+                </span>
               ))}
             </div>
           </div>
@@ -244,6 +152,7 @@ function RenderBatchMini(
 export default function HomePage() {
 
   const [debug, setDebug] = useState(false);
+  const [xl, setXl] = useState(false);
 
   // header
   const [now, setNow] = useState('');
@@ -525,7 +434,7 @@ export default function HomePage() {
   const showEmpty = !loading && !splitMode && !currentProduct && (!batches || batches.length === 0);
 
   return (
-    <div className={styles.root}>
+    <div className={`${styles.root} ${xl ? styles.distanceOn : ''}`}>
       {/* Toast (single mode) */}
       {!splitMode && toast && (
         <div className={styles.toastWrap} aria-live="polite" aria-atomic="true">
