@@ -1,3 +1,41 @@
+/* Subtiele confetti/lichtgloed bij batch compleet */
+.batchCompleteConfetti {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  animation: fadeOutConfetti 1s linear forwards;
+}
+@keyframes fadeOutConfetti {
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.batchCompleteGlow {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 50%, #fff7b2 0%, #fff0 70%);
+  opacity: 0.7;
+  animation: glowPulse 1s ease-out forwards;
+}
+@keyframes glowPulse {
+  0% { opacity: 0.7; }
+  80% { opacity: 1; }
+  100% { opacity: 0; }
+}
+.confettiDot {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ffd166;
+  box-shadow: 0 0 16px #ffd16688;
+  animation: confettiDrop 1s cubic-bezier(.4,2,.6,1) forwards;
+}
+@keyframes confettiDrop {
+  0% { transform: scale(0.7) translateY(-40px); }
+  60% { transform: scale(1.1) translateY(10px); }
+  100% { transform: scale(1) translateY(0); opacity: 0; }
+}
 /* ===== Creator styles (topbar/single/split) ===== */
 
 /* TOPBAR pill */

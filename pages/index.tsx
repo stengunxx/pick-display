@@ -1,17 +1,13 @@
-// utils
-function getInitials(name?: string | null) {
-  if (!name) return '—';
-  return name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map(p => p[0]?.toUpperCase() ?? '')
-    .join('');
-}
-// Type definitions for batch view and mini effect state
+// pages/index.tsx
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import styles from '../styles/PickDisplay.module.css';
+import { zoneColor, zoneOf } from '../lib/picqer';
+
+/* ===================== TYPES & UTILS ===================== */
+
 type BatchView = {
   batchId: string | number;
-  currentProduct: any;
+  currentProduct: any | null;
   product: string;
   sku: string;
   done: number;
@@ -21,31 +17,40 @@ type BatchView = {
   items: any[];
   totalProducts: number;
   todoProducts: number;
-  createdBy?: string; // Toegevoegd veld voor gebruikersprofiel
+  createdBy?: string | null;
 };
 
-type MiniFx = {
-  [batchId: string]: {
+type MiniFxMap = Record<
+  string,
+  {
     locPulse?: boolean;
     bump?: boolean;
     newPick?: boolean;
     __loc?: string;
     __done?: number;
-  };
-};
+  }
+>;
 
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+const collator = new Intl.Collator('nl', { numeric: true, sensitivity: 'base' });
+const locOf = (it: any) => (it?.stocklocation ?? it?.stock_location ?? '').toString();
+const pickedOf = (it: any) => Number(it?.amountpicked ?? it?.amount_picked ?? 0);
+const totalOf  = (it: any) => Number(it?.amount ?? it?.amount_to_pick ?? 0);
 
-// Stub for signOut (replace with actual auth logic if needed)
+function getInitials(name?: string | null) {
+  if (!name) return '—';
+  return name.split(/\s+/).filter(Boolean).slice(0, 2).map(p => p[0]?.toUpperCase() ?? '').join('');
+}
+
+// (stub) – vervang met je eigen auth/next-auth signOut wanneer gewenst
 function signOut({ callbackUrl }: { callbackUrl: string }) {
   window.location.href = callbackUrl;
 }
-import styles from '../styles/PickDisplay.module.css';
-import { zoneOf, zoneColor } from '../lib/picqer';
 
-// ProductImage component
-function ProductImage({ item, max, radius, alt, debugSwitch, bare }: { item: any; max?: number; radius?: number; alt?: string; debugSwitch?: boolean; bare?: boolean }) {
-  // Use enriched image URL if available, fallback to placeholder
+/* ===================== DUMB COMPONENTS ===================== */
+
+function ProductImage({
+  item, max, radius, alt,
+}: { item: any; max?: number; radius?: number; alt?: string }) {
   const url = item?.imageUrl || item?.image_url || item?.image || '';
   return (
     <img
@@ -56,23 +61,9 @@ function ProductImage({ item, max, radius, alt, debugSwitch, bare }: { item: any
   );
 }
 
-
-// ...existing helper functions and types...
-
-
-const collator = new Intl.Collator('nl', { numeric: true, sensitivity: 'base' });
-const locOf = (it: any) => (it?.stocklocation ?? it?.stock_location ?? '').toString();
-
-const pickedOf = (it: any) => Number(it?.amountpicked ?? it?.amount_picked ?? 0);
-const totalOf  = (it: any) => Number(it?.amount ?? it?.amount_to_pick ?? 0);
-
-/* ===================== MINI PANEL (split) ===================== */
-
-
-
-function RenderBatchMini(
-  { b, fx, debug }: { b: BatchView; fx?: { locPulse?: boolean; bump?: boolean; newPick?: boolean }; debug?: boolean }
-) {
+function RenderBatchMini({
+  b, fx,
+}: { b: BatchView; fx?: { locPulse?: boolean; bump?: boolean; newPick?: boolean } }) {
   if (!b) return null;
   const cur = b.currentProduct;
   const loc = cur ? String(cur.stocklocation ?? cur.stock_location ?? '—') : '—';
@@ -81,7 +72,7 @@ function RenderBatchMini(
   return (
     <div className={styles.panel}>
       <div className={styles.panelCard}>
-        {/* HERO locatiebalk: groot en in het oog */}
+        {/* HERO locatiebalk */}
         <div
           className={`${styles.heroLoc} ${fx?.locPulse ? styles.heroLocPulse : ''}`}
           style={{ ['--zone' as any]: zoneColor(loc) }}
@@ -95,7 +86,7 @@ function RenderBatchMini(
           </div>
         </div>
 
-        {/* Premium miniHeader layout */}
+        {/* Header */}
         <div className={styles.miniHeader}>
           <div className={styles.miniMetaLeft}>
             <span className={styles.batchId}>Batch #{String(b.batchId)}</span>
@@ -115,20 +106,18 @@ function RenderBatchMini(
           </div>
         </div>
 
-        {/* 3-koloms layout */}
+        {/* Body */}
         <div className={styles.panelGrid}>
-          {/* Links: image + SKU */}
           <div className={styles.colLeft}>
             <div className={styles.imageWellSm} style={{ ['--zone' as any]: zoneColor(loc) }}>
-              <ProductImage item={cur} max={72} radius={12} alt={cur?.product || cur?.name || 'Productfoto'} debugSwitch={!!debug} bare />
+              <ProductImage item={cur} max={72} radius={12} alt={cur?.product || cur?.name || 'Productfoto'} />
             </div>
             <div className={styles.skuBadge}>SKU: <b>{b.sku || '—'}</b></div>
           </div>
 
-          {/* Midden: product + totals */}
           <div className={styles.colCenter}>
             <div className={styles.productNameSplit}>{b.product || '—'}</div>
-            {(typeof b.totalProducts === 'number' && typeof b.todoProducts === 'number') && (
+            {typeof b.totalProducts === 'number' && typeof b.todoProducts === 'number' && (
               <div className={styles.miniTotals}>
                 <span>Nog te doen: <b>{b.todoProducts}</b></span>
                 <span className={styles.dot}>•</span>
@@ -137,7 +126,6 @@ function RenderBatchMini(
             )}
           </div>
 
-          {/* Rechts: counts */}
           <div className={styles.colRight}>
             <div className={`${styles.countPill} ${fx?.bump ? styles.pillFlashSm : ''}`}>
               <div className={styles.countValue}>{b.done}</div>
@@ -150,7 +138,6 @@ function RenderBatchMini(
           </div>
         </div>
 
-        {/* Volgende locaties */}
         {!!b.nextLocations?.length && (
           <div className={styles.nextStrip}>
             <div className={styles.nextStripTitle}>Volgende locaties</div>
@@ -171,7 +158,6 @@ function RenderBatchMini(
 /* ===================== PAGE ===================== */
 
 export default function HomePage() {
-
   const [debug, setDebug] = useState(false);
   const [xl, setXl] = useState(false);
 
@@ -187,43 +173,51 @@ export default function HomePage() {
   const [done, setDone] = useState(0);
   const [total, setTotal] = useState(0);
   const [nextLocations, setNextLocations] = useState<string[]>([]);
-
-  // batch creator state
+  const [primaryCreatedBy, setPrimaryCreatedBy] = useState<string | null>(null);
 
   // split view
   const [batches, setBatches] = useState<BatchView[]>([]);
-  const [miniFx, setMiniFx] = useState<MiniFx>({}); // alleen voor split
+  const [miniFx, setMiniFx] = useState<MiniFxMap>({});
 
-  // single-mode animaties (los van split)
-  const [singleFx, setSingleFx] = useState<{locPulse:boolean; bump:boolean}>({locPulse:false, bump:false});
+  // single-mode animaties
+  const [singleFx, setSingleFx] = useState<{ locPulse: boolean; bump: boolean }>({ locPulse: false, bump: false });
 
-  // toasts
-  const [toast, setToast] = useState<{text:string}|null>(null);
+  // toasts (met throttle)
+  const [toast, setToast] = useState<{ text: string } | null>(null);
   const toastTimerRef = useRef<any>(null);
-  const showToast = (text: string) => {
+  const shownKeysRef = useRef<Record<string, number>>({}); // key -> lastShown ts
+  const showToast = (text: string, duration = 1400) => {
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     setToast({ text });
-    toastTimerRef.current = setTimeout(() => setToast(null), 2200);
+    toastTimerRef.current = setTimeout(() => setToast(null), duration);
+  };
+  const showToastOnce = (key: string, text: string, cooldownMs = 5000) => {
+    const now = Date.now();
+    const last = shownKeysRef.current[key] || 0;
+    if (now - last >= cooldownMs) {
+      shownKeysRef.current[key] = now;
+      showToast(text);
+    }
   };
 
   // fetching + empty-state stabilisatie
-  const [loading, setLoading] = useState(true);
-  const emptyTicksRef = useRef(0);
-  const EMPTY_TICKS_TO_CLEAR = 3;
+  const [loading, setLoading] = useState(true); // alleen voor eerste fetch
+  const isFirstFetchRef = useRef(true);
+  const [emptyVisible, setEmptyVisible] = useState(false);
+  const emptyShowTimerRef = useRef<any>(null);
 
-  // error state (fixes error references)
+  // confetti/guards
+  const [batchCompleteFx, setBatchCompleteFx] = useState(false);
+  const wasActiveRef = useRef(false);
+
+  // error state
   const [error, setError] = useState<string>('');
 
-  // misc refs voor detectie
+  // misc refs
   const prevLocRef = useRef('');
   const prevDoneRef = useRef<number>(-1);
   const prevSkuRef = useRef<string>('');
-  // Ref to track previous picklistId for toast logic
-  const prevPicklistIdRef = useRef<string | number>('');
-  // Ref om vorige productcodes/skus van batch te onthouden
-  // In split mode, store as tuple of arrays: [batchA, batchB]
   const prevBatchSkusRef = useRef<[string[], string[]] | string[]>([]);
-  const [primaryCreatedBy, setPrimaryCreatedBy] = useState<string | null>(null);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -233,28 +227,38 @@ export default function HomePage() {
     return () => clearInterval(t);
   }, []);
 
+  // wanneer empty zichtbaar wordt → eventuele toasts weg
+  useEffect(() => {
+    if (emptyVisible && toast) {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      setToast(null);
+    }
+  }, [emptyVisible, toast]);
+
   // Polling
   useEffect(() => {
     let unmounted = false;
     let timer: any = null;
 
     async function fetchOnce() {
-      let loaderTimer: any;
       try {
-        loaderTimer = setTimeout(() => setLoading(true), 450);
+        if (isFirstFetchRef.current) setLoading(true);
 
-        // Force cache busting with a random value and also add a timestamp for extra freshness
         const bust = `_=${Date.now()}&rnd=${Math.random()}&nocache=${Math.random().toString(36).slice(2)}`;
+
+        // 1) Haal open batchIds op
         const j = await fetch(`/api/next-batch?${bust}`, {
           cache: 'no-store',
           headers: {
             'Cache-Control': 'no-cache, no-store, must-revalidate',
-            'Pragma': 'no-cache',
-            'Expires': '0'
-          }
-        }).then(r => r.json());
+            Pragma: 'no-cache',
+            Expires: '0',
+          },
+        }).then((r) => r.json());
+
         const ids: (string | number)[] = Array.isArray(j.batchIds) ? j.batchIds : (j.batchId ? [j.batchId] : []);
 
+        // createdBy-map
         const createdByMap = new Map<string, string | null>();
         if (Array.isArray(j?.batches)) {
           for (const b of j.batches) {
@@ -263,30 +267,38 @@ export default function HomePage() {
           }
         }
 
+        // Geen ids → empty-state direct tonen, geen vertraging, geen confetti/toast hier!
         if (!ids || ids.length === 0) {
-          emptyTicksRef.current += 1;
-          if (emptyTicksRef.current >= EMPTY_TICKS_TO_CLEAR) {
-            if (!unmounted) {
-              setBatches([]);
-              // laat single view staan tot echt 3 lege polls → UX rustiger
-            }
-          }
+          setEmptyVisible(true);
+          setBatches([]);
+          setPicklistId('');
+          setProgress(0);
+          setCurrentProduct(null);
+          setDataItems([]);
+          setSku('');
+          setDone(0);
+          setTotal(0);
+          setNextLocations([]);
+          setPrimaryCreatedBy(null);
           return;
         }
 
+        // 2) Voor max 2 batches: haal items op
         const settled = await Promise.allSettled(
-          ids.slice(0, 2).map(id => fetch(`/api/next-pick?batchId=${id}&${bust}`, {
-            cache: 'no-store',
-            headers: {
-              'Cache-Control': 'no-cache, no-store, must-revalidate',
-              'Pragma': 'no-cache',
-              'Expires': '0'
-            }
-          }).then(r => r.json()))
+          ids.slice(0, 2).map((id) =>
+            fetch(`/api/next-pick?batchId=${id}&${bust}`, {
+              cache: 'no-store',
+              headers: {
+                'Cache-Control': 'no-cache, no-store, must-revalidate',
+                Pragma: 'no-cache',
+                Expires: '0',
+              },
+            }).then((r) => r.json())
+          )
         );
 
+        // 3) Bouw views
         const views: BatchView[] = [];
-
         for (let i = 0; i < settled.length; i++) {
           const res = settled[i];
           if (res.status !== 'fulfilled') continue;
@@ -296,31 +308,31 @@ export default function HomePage() {
             ? p.items.slice().sort((a: any, b: any) => collator.compare(locOf(a), locOf(b)))
             : [];
 
-          const cur = items.find(it => pickedOf(it) < totalOf(it)) ?? null;
+          const cur = items.find((it) => pickedOf(it) < totalOf(it)) ?? null;
 
           const prog = items.length
-            ? Math.round((items.filter(it => pickedOf(it) >= totalOf(it)).length / items.length) * 100)
+            ? Math.round((items.filter((it) => pickedOf(it) >= totalOf(it)).length / items.length) * 100)
             : 0;
 
           let nextLocs: string[] = [];
           if (cur) {
-            const curIdx = items.findIndex(x => x === cur);
+            const curIdx = items.findIndex((x) => x === cur);
             const curLoc = locOf(cur);
             const seen = new Set<string>();
             nextLocs = items
               .map((it, idx) => ({ it, idx }))
               .filter(({ it, idx }) => idx > curIdx && pickedOf(it) < totalOf(it))
               .map(({ it }) => locOf(it))
-              .filter(loc => loc && loc !== curLoc && (seen.has(loc) ? false : (seen.add(loc), true)));
+              .filter((loc) => loc && loc !== curLoc && (seen.has(loc) ? false : (seen.add(loc), true)));
           }
 
           const totalProducts = items.reduce((s, it) => s + totalOf(it), 0);
           const todoProducts  = items.reduce((s, it) => s + Math.max(0, totalOf(it) - pickedOf(it)), 0);
 
           views.push({
-          batchId: ids[i],
-          createdBy: (j.batches && j.batches[i] && j.batches[i].createdBy) ? j.batches[i].createdBy : null,
-          currentProduct: cur,
+            batchId: ids[i],
+            createdBy: createdByMap.get(String(ids[i])) ?? null,
+            currentProduct: cur,
             product: (cur?.product ?? cur?.name ?? cur?.title ?? cur?.omschrijving ?? cur?.description ?? p.product ?? '') as string,
             sku: (cur?.productcode ?? cur?.sku ?? '') as string,
             done: cur ? pickedOf(cur) : 0,
@@ -335,19 +347,27 @@ export default function HomePage() {
 
         if (unmounted) return;
 
-
-        const active = views.filter(v => v.currentProduct);
+        const active = views.filter((v) => v.currentProduct);
         const primary = active[0] || null;
+        const allDone = views.length > 0 && active.length === 0;
+
+  // Zodra we data hebben, empty niet tonen
+  setEmptyVisible(false);
 
         if (active.length > 0 && primary?.currentProduct) {
-          emptyTicksRef.current = 0;
+          // We hebben actieve picks
+          if (!wasActiveRef.current) {
+            // nieuwe actieve fase → reset toast throttle, zodat “Nieuwe picklijst” weer kan
+            shownKeysRef.current = {};
+          }
+          wasActiveRef.current = true;
 
-          // SPLIT state (mini-effecten)
+          // SPLIT: state + mini-effecten
           setBatches(active);
-          setMiniFx(prev => {
-            const next: MiniFx = { ...prev };
+          setMiniFx((prev) => {
+            const next: MiniFxMap = { ...prev };
             for (const v of active) {
-              const id = v.batchId;
+              const id = String(v.batchId);
               const locNow = String(v.currentProduct?.stocklocation ?? v.currentProduct?.stock_location ?? '');
               const d = Number(v.done ?? 0);
               const prevKey = `${(prev as any)[id]?.__loc ?? ''}|${(prev as any)[id]?.__done ?? -1}`;
@@ -357,11 +377,12 @@ export default function HomePage() {
               (next as any)[id].__loc = locNow;
               (next as any)[id].__done = d;
               setTimeout(() => {
-                setMiniFx(curr => ({ ...curr, [id]: { ...(curr[id] || {}), locPulse: false, bump: false } }));
+                setMiniFx((curr) => ({ ...curr, [id]: { ...(curr[id] || {}), locPulse: false, bump: false } }));
               }, locChanged ? 600 : 300);
             }
-            Object.keys(next).forEach(k => {
-              if (!active.some(v => String(v.batchId) === String(k))) delete (next as any)[k];
+            // opschonen
+            Object.keys(next).forEach((k) => {
+              if (!active.some((v) => String(v.batchId) === String(k))) delete (next as any)[k];
             });
             return next;
           });
@@ -370,79 +391,91 @@ export default function HomePage() {
           setPicklistId(String(primary.batchId));
           setProgress(primary.progress);
 
-          // SPLIT/Single view detecties + animaties/toasts
-          // For split mode, check for new picklist in either batch
-          if (active.length >= 2) {
-            // Compare current SKUs for both batches to previous, store as tuple
-            const currentSkusA = Array.isArray(active[0].items) ? active[0].items.map(it => String(it.productcode ?? it.sku ?? '')) : [];
-            const currentSkusB = Array.isArray(active[1].items) ? active[1].items.map(it => String(it.productcode ?? it.sku ?? '')) : [];
-            let prevTuple: [string[], string[]] = [[], []];
-            if (Array.isArray(prevBatchSkusRef.current) && prevBatchSkusRef.current.length === 2 && Array.isArray(prevBatchSkusRef.current[0]) && Array.isArray(prevBatchSkusRef.current[1])) {
-              prevTuple = prevBatchSkusRef.current as [string[], string[]];
-            }
-            const isNewA = prevTuple[0].length > 0 && currentSkusA.length > 0 && (prevTuple[0] as string[]).join('|') !== currentSkusA.join('|');
-            const isNewB = prevTuple[1].length > 0 && currentSkusB.length > 0 && (prevTuple[1] as string[]).join('|') !== currentSkusB.join('|');
-            if (isNewA || isNewB) {
-              showToast('Nieuwe picklijst');
-            }
-            // Store tuple for next comparison
-            prevBatchSkusRef.current = [currentSkusA, currentSkusB];
-          } else {
-            // Single view logic
-            const loc = primary.currentProduct.stocklocation ?? primary.currentProduct.stock_location ?? '';
-            const doneVal = primary.done;
-            const skuVal  = primary.sku || '';
-            const batchIdVal = String(primary.batchId);
+          // Confetti bij 100%
+          if (typeof primary.progress === 'number' && primary.progress === 100 && !batchCompleteFx) {
+            setBatchCompleteFx(true);
+            setTimeout(() => setBatchCompleteFx(false), 1000);
+          }
 
-            // locatie wissel → zachte glow (geen toast)
-            if (prevLocRef.current && prevLocRef.current !== loc) {
-              setSingleFx(s => ({ ...s, locPulse: true }));
-              setTimeout(() => setSingleFx(s => ({ ...s, locPulse: false })), 520);
-            }
-            prevLocRef.current = loc;
+          // SINGLE view: animaties & data
+          const loc = primary.currentProduct.stocklocation ?? primary.currentProduct.stock_location ?? '';
+          const doneVal = primary.done;
+          const skuVal = primary.sku || '';
 
-            // done toename → kleine pop animatie + groen
-            if (prevDoneRef.current >= 0 && doneVal > prevDoneRef.current) {
-              setSingleFx(s => ({ ...s, bump: true }));
-              setTimeout(() => setSingleFx(s => ({ ...s, bump: false })), 1000);
-            }
-            prevDoneRef.current = doneVal;
+          if (prevLocRef.current && prevLocRef.current !== loc) {
+            setSingleFx((s) => ({ ...s, locPulse: true }));
+            setTimeout(() => setSingleFx((s) => ({ ...s, locPulse: false })), 520);
+          }
+          prevLocRef.current = loc;
 
-            // batchId verandering → nieuwe picklijst toast
-            const currentSkus = Array.isArray(primary.items)
-              ? primary.items.map(it => String(it.productcode ?? it.sku ?? ''))
-              : [];
-            const prevSkus = prevBatchSkusRef.current;
-            const isNewPicklist = prevSkus.length > 0 && currentSkus.length > 0 && (
-              prevSkus.join('|') !== currentSkus.join('|')
-            );
-            if (isNewPicklist) {
-              showToast('Nieuwe picklijst');
-            }
-            prevBatchSkusRef.current = currentSkus;
+          if (prevDoneRef.current >= 0 && doneVal > prevDoneRef.current) {
+            setSingleFx((s) => ({ ...s, bump: true }));
+            setTimeout(() => setSingleFx((s) => ({ ...s, bump: false })), 1000);
+          }
+          prevDoneRef.current = doneVal;
+          prevSkuRef.current = skuVal;
 
-            prevSkuRef.current = skuVal;
+          // Detecteer nieuwe picklijst op basis van item SKUs → throttle per batchId
+          const currentSkus = Array.isArray(primary.items)
+            ? primary.items.map((it) => String(it.productcode ?? it.sku ?? ''))
+            : [];
+          const prevSkus = prevBatchSkusRef.current as string[] | [string[], string[]];
+          const prevSkusFlat = Array.isArray(prevSkus[0]) ? (prevSkus as [string[], string[]])[0] : (prevSkus as string[]);
+          if (
+            Array.isArray(prevSkusFlat) &&
+            prevSkusFlat.length > 0 &&
+            currentSkus.length > 0 &&
+            prevSkusFlat.join('|') !== currentSkus.join('|')
+          ) {
+            const toastKey = `newpick:${primary.batchId}`;
+            showToastOnce(toastKey, 'Nieuwe picklijst', 5000);
+          }
+          prevBatchSkusRef.current = currentSkus;
 
-            // update single data
-            setCurrentProduct(primary.currentProduct);
-            setDataItems(Array.isArray(primary.items) ? primary.items : []);
-            setSku(primary.sku);
-            setDone(primary.done);
-            setTotal(primary.total);
-            setNextLocations(primary.nextLocations);
-            setPrimaryCreatedBy(primary.createdBy ?? null);
+          // data setten
+          setCurrentProduct(primary.currentProduct);
+          setDataItems(Array.isArray(primary.items) ? primary.items : []);
+          setSku(primary.sku);
+          setDone(primary.done);
+          setTotal(primary.total);
+          setNextLocations(primary.nextLocations);
+          setPrimaryCreatedBy(primary.createdBy ?? null);
+        } else if (allDone) {
+          // batches bestaan maar alles is gepickt ⇒ éénmalige completed feedback + direct naar empty-state
+          if (wasActiveRef.current) {
+            wasActiveRef.current = false;
+            showToastOnce('completed', 'Batch voltooid', 5000);
+            if (!batchCompleteFx) setBatchCompleteFx(true);
+            setTimeout(() => setBatchCompleteFx(false), 1000);
+
+            // UI opschonen en direct empty tonen
+            setBatches([]);
+            setCurrentProduct(null);
+            setDataItems([]);
+            setSku('');
+            setDone(0);
+            setTotal(0);
+            setNextLocations([]);
+            setPicklistId('');
+            setProgress(0);
+            setPrimaryCreatedBy(null);
+            setError('');
+            setEmptyVisible(true);
           }
         } else {
-          // tijdelijk leeg → behoud laatste goede view
-          emptyTicksRef.current += 1;
+          // tijdelijke tussenfase → even geen empty tonen
+          if (emptyShowTimerRef.current) clearTimeout(emptyShowTimerRef.current);
+          setEmptyVisible(false);
         }
 
         setError('');
       } catch (e: any) {
         setError(e?.message || 'Er ging iets mis.');
       } finally {
-        setLoading(false);
-        clearTimeout(loaderTimer);
+        if (isFirstFetchRef.current) {
+          setLoading(false);
+          isFirstFetchRef.current = false;
+        }
       }
     }
 
@@ -452,24 +485,43 @@ export default function HomePage() {
     };
 
     loop();
-    return () => { unmounted = true; if (timer) clearTimeout(timer); if (toastTimerRef.current) clearTimeout(toastTimerRef.current); };
-  }, []);
+    return () => {
+      unmounted = true;
+      if (timer) clearTimeout(timer);
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      if (emptyShowTimerRef.current) clearTimeout(emptyShowTimerRef.current);
+    };
+  }, [batchCompleteFx]);
 
-  const splitMode = batches.filter(b => b && b.currentProduct).length >= 2;
+  const splitMode = batches.filter((b) => b && b.currentProduct).length >= 2;
 
   const pickTotals = useMemo(() => {
     const items = Array.isArray(dataItems) ? dataItems : [];
     if (!items.length) return { totalProducts: total, todoProducts: Math.max(0, total - done) };
     const totalProducts = items.reduce((s, it) => s + totalOf(it), 0);
-    const todoProducts  = items.reduce((s, it) => s + Math.max(0, totalOf(it) - pickedOf(it)), 0);
+    const todoProducts = items.reduce((s, it) => s + Math.max(0, totalOf(it) - pickedOf(it)), 0);
     return { totalProducts, todoProducts };
   }, [dataItems, total, done]);
 
-  const showEmpty = !loading && !splitMode && !currentProduct && (!batches || batches.length === 0);
+  const hasActive = splitMode || !!currentProduct;
+  const shouldShowEmpty = !splitMode && !currentProduct && (!batches.length || batches.every(b => !b.currentProduct));
+
+  /* ===================== RENDER ===================== */
 
   return (
     <div className={`${styles.root} ${xl ? styles.distanceOn : ''}`}>
-      {/* Toast (single mode) */}
+      {/* Confetti overlay */}
+      {batchCompleteFx && (
+        <div className={styles.batchCompleteConfetti}>
+          <div className={styles.batchCompleteGlow} />
+          <div className={styles.confettiDot} style={{ left: '18%', top: '22%' }} />
+          <div className={styles.confettiDot} style={{ left: '38%', top: '66%' }} />
+          <div className={styles.confettiDot} style={{ left: '58%', top: '40%' }} />
+          <div className={styles.confettiDot} style={{ left: '78%', top: '28%' }} />
+        </div>
+      )}
+
+      {/* Toast (alleen single mode tonen) */}
       {!splitMode && toast && (
         <div className={styles.toastWrap} aria-live="polite" aria-atomic="true">
           <div className={styles.toastBubble}>{toast.text}</div>
@@ -482,8 +534,8 @@ export default function HomePage() {
           <div style={{ display: 'flex', alignItems: 'center' }}>
             <nav className={styles.nav}>
               <a className={styles.navBtn}>Home</a>
-              <a className={styles.navBtn}>Station 1</a>
-              <button onClick={() => setDebug(d => !d)} className={styles.debugBtn}>
+              <a className={styles.navBtn} onClick={() => setXl((x) => !x)}>Station 1</a>
+              <button onClick={() => setDebug((d) => !d)} className={styles.debugBtn}>
                 Debug {debug ? '🔛' : '🔘'}
               </button>
             </nav>
@@ -499,9 +551,13 @@ export default function HomePage() {
                     <strong className={styles.creatorName}>{primaryCreatedBy}</strong>
                   </span>
                 )}
-                {splitMode ? null : <span>Voortgang: <strong>{progress}%</strong></span>}
-                {splitMode ? null : <span>Totaal: <strong>{pickTotals.totalProducts}</strong></span>}
-                {splitMode ? null : <span>Nog te doen: <strong>{pickTotals.todoProducts}</strong></span>}
+                {!splitMode && (
+                  <>
+                    <span>Voortgang: <strong>{progress}%</strong></span>
+                    <span>Totaal: <strong>{pickTotals.totalProducts}</strong></span>
+                    <span>Nog te doen: <strong>{pickTotals.todoProducts}</strong></span>
+                  </>
+                )}
                 <span className={styles.clock}>{now}</span>
               </div>
               {!splitMode && (
@@ -529,6 +585,7 @@ export default function HomePage() {
         </div>
       </header>
 
+      {/* Main */}
       <main className={styles.main}>
         {error ? (
           <div style={{ textAlign: 'center', marginTop: 64, color: '#d33', fontSize: '1.5rem', fontWeight: 500 }}>
@@ -539,16 +596,16 @@ export default function HomePage() {
         ) : splitMode ? (
           <div className={styles.splitWrap}>
             <section className={styles.splitPaneTop}>
-              <RenderBatchMini b={batches[0]} fx={miniFx[batches[0].batchId]} debug={debug} />
+              <RenderBatchMini b={batches[0]} fx={miniFx[String(batches[0].batchId)]} />
             </section>
             <section className={styles.splitPaneBottom}>
-              <RenderBatchMini b={batches[1]} fx={miniFx[batches[1].batchId]} debug={debug} />
+              <RenderBatchMini b={batches[1]} fx={miniFx[String(batches[1].batchId)]} />
             </section>
           </div>
         ) : currentProduct ? (
           <div className={styles.singleWrap}>
             <div className={styles.card}>
-              {/* HERO LOCATIE */}
+              {/* HERO locatie */}
               {(() => {
                 const loc = String(currentProduct?.stocklocation ?? currentProduct?.stock_location ?? '—');
                 const segs = loc.split(/[.\s-]+/).filter(Boolean);
@@ -568,12 +625,12 @@ export default function HomePage() {
                 );
               })()}
 
-              {/* FOTO + PROGRESS RING */}
+              {/* FOTO + PROGRESS-RING */}
               <div
                 className={styles.heroImageWrap}
                 style={{
                   ['--zone' as any]: zoneColor(currentProduct?.stocklocation ?? currentProduct?.stock_location),
-                  ['--prog' as any]: total > 0 ? Math.max(0, Math.min(100, (done / total) * 100)) : 0
+                  ['--prog' as any]: total > 0 ? Math.max(0, Math.min(100, (done / total) * 100)) : 0,
                 }}
               >
                 <ProductImage
@@ -581,8 +638,6 @@ export default function HomePage() {
                   max={260}
                   radius={16}
                   alt={currentProduct?.product || currentProduct?.name || 'Productfoto'}
-                  debugSwitch={debug}
-                  bare
                 />
               </div>
 
@@ -594,8 +649,10 @@ export default function HomePage() {
 
               {/* STATS */}
               <div className={styles.statsWide}>
-                <div className={`${styles.statCard} ${singleFx.bump ? styles.statFlash : ''}`}
-                     style={{ ['--zone' as any]: zoneColor(currentProduct?.stocklocation ?? currentProduct?.stock_location) }}>
+                <div
+                  className={`${styles.statCard} ${singleFx.bump ? styles.statFlash : ''}`}
+                  style={{ ['--zone' as any]: zoneColor(currentProduct?.stocklocation ?? currentProduct?.stock_location) }}
+                >
                   <div className={styles.statCardValue}>{done}</div>
                   <div className={styles.statCardLabel}>Gedaan</div>
                 </div>
@@ -620,11 +677,11 @@ export default function HomePage() {
               )}
             </div>
           </div>
-        ) : showEmpty ? (
+        ) : shouldShowEmpty ? (
           <div style={{ textAlign: 'center', marginTop: 64, color: '#888', fontSize: '1.5rem', fontWeight: 500 }}>
             Geen actieve batch of pickdata gevonden.
             <br />
-            <span style={{ fontSize: '1rem', color: '#aaa' }}>Wacht op een nieuwe batch in Picqer…</span>
+            <span style={{ fontSize: '1rem', color: '#aaa' }}>Wacht op een nieuwe batch…</span>
           </div>
         ) : null}
       </main>
