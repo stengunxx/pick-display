@@ -1,3 +1,13 @@
+// utils
+function getInitials(name?: string | null) {
+  if (!name) return '—';
+  return name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(p => p[0]?.toUpperCase() ?? '')
+    .join('');
+}
 // Type definitions for batch view and mini effect state
 type BatchView = {
   batchId: string | number;
@@ -11,6 +21,7 @@ type BatchView = {
   items: any[];
   totalProducts: number;
   todoProducts: number;
+  createdBy?: string; // Toegevoegd veld voor gebruikersprofiel
 };
 
 type MiniFx = {
@@ -32,7 +43,7 @@ function signOut({ callbackUrl }: { callbackUrl: string }) {
 import styles from '../styles/PickDisplay.module.css';
 import { zoneOf, zoneColor } from '../lib/picqer';
 
-// Local stub for ProductImage component
+// ProductImage component
 function ProductImage({ item, max, radius, alt, debugSwitch, bare }: { item: any; max?: number; radius?: number; alt?: string; debugSwitch?: boolean; bare?: boolean }) {
   // Use enriched image URL if available, fallback to placeholder
   const url = item?.imageUrl || item?.image_url || item?.image || '';
@@ -84,10 +95,20 @@ function RenderBatchMini(
           </div>
         </div>
 
-        {/* Header mini met progress */}
+        {/* Premium miniHeader layout */}
         <div className={styles.miniHeader}>
-          <div className={styles.miniTitle}>
-            Batch #{String(b.batchId)} <span>•</span> Voortgang: {b.progress}%
+          <div className={styles.miniMetaLeft}>
+            <span className={styles.batchId}>Batch #{String(b.batchId)}</span>
+            <span className={styles.dot}>•</span>
+            <span>Voortgang: {b.progress}%</span>
+          </div>
+          <div className={styles.miniMetaCenter}>
+            {b.createdBy && (
+              <span className={styles.creatorTag} title={`Aangemaakt door ${b.createdBy}`}>
+                <span className={styles.creatorDotSm} aria-hidden="true">{getInitials(b.createdBy)}</span>
+                <span className={styles.creatorNameSm}>{b.createdBy}</span>
+              </span>
+            )}
           </div>
           <div className={styles.miniProgress}>
             <i style={{ width: `${Math.max(0, Math.min(100, b.progress || 0))}%` }} />
@@ -167,6 +188,8 @@ export default function HomePage() {
   const [total, setTotal] = useState(0);
   const [nextLocations, setNextLocations] = useState<string[]>([]);
 
+  // batch creator state
+
   // split view
   const [batches, setBatches] = useState<BatchView[]>([]);
   const [miniFx, setMiniFx] = useState<MiniFx>({}); // alleen voor split
@@ -200,6 +223,7 @@ export default function HomePage() {
   // Ref om vorige productcodes/skus van batch te onthouden
   // In split mode, store as tuple of arrays: [batchA, batchB]
   const prevBatchSkusRef = useRef<[string[], string[]] | string[]>([]);
+  const [primaryCreatedBy, setPrimaryCreatedBy] = useState<string | null>(null);
 
   useEffect(() => {
     const t = setInterval(() => {
@@ -230,6 +254,14 @@ export default function HomePage() {
           }
         }).then(r => r.json());
         const ids: (string | number)[] = Array.isArray(j.batchIds) ? j.batchIds : (j.batchId ? [j.batchId] : []);
+
+        const createdByMap = new Map<string, string | null>();
+        if (Array.isArray(j?.batches)) {
+          for (const b of j.batches) {
+            const bid = String(b?.batchId ?? '');
+            if (bid) createdByMap.set(bid, b?.createdBy ?? null);
+          }
+        }
 
         if (!ids || ids.length === 0) {
           emptyTicksRef.current += 1;
@@ -286,8 +318,9 @@ export default function HomePage() {
           const todoProducts  = items.reduce((s, it) => s + Math.max(0, totalOf(it) - pickedOf(it)), 0);
 
           views.push({
-            batchId: ids[i],
-            currentProduct: cur,
+          batchId: ids[i],
+          createdBy: (j.batches && j.batches[i] && j.batches[i].createdBy) ? j.batches[i].createdBy : null,
+          currentProduct: cur,
             product: (cur?.product ?? cur?.name ?? cur?.title ?? cur?.omschrijving ?? cur?.description ?? p.product ?? '') as string,
             sku: (cur?.productcode ?? cur?.sku ?? '') as string,
             done: cur ? pickedOf(cur) : 0,
@@ -397,6 +430,7 @@ export default function HomePage() {
             setDone(primary.done);
             setTotal(primary.total);
             setNextLocations(primary.nextLocations);
+            setPrimaryCreatedBy(primary.createdBy ?? null);
           }
         } else {
           // tijdelijk leeg → behoud laatste goede view
@@ -456,20 +490,20 @@ export default function HomePage() {
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5em' }}>
             <div className={styles.status}>
-              {splitMode ? (
-                <div className={styles.statusRow}>
-                  <span>Picklist: <strong>#{picklistId || '—'}</strong></span>
-                  <span className={styles.clock}>{now}</span>
-                </div>
-              ) : (
-                <div className={styles.statusRow}>
-                  <span>Picklist: <strong>#{picklistId || '—'}</strong></span>
-                  <span>Voortgang: <strong>{progress}%</strong></span>
-                  <span>Totaal: <strong>{pickTotals.totalProducts}</strong></span>
-                  <span>Nog te doen: <strong>{pickTotals.todoProducts}</strong></span>
-                  <span className={styles.clock}>{now}</span>
-                </div>
-              )}
+              <div className={styles.statusRow}>
+                <span>Picklist: <strong>#{picklistId || '—'}</strong></span>
+                {primaryCreatedBy && (
+                  <span className={styles.creatorTopbar}>
+                    <span className={styles.creatorDot} aria-hidden="true">{getInitials(primaryCreatedBy)}</span>
+                    <span className={styles.creatorLabel}>Door</span>
+                    <strong className={styles.creatorName}>{primaryCreatedBy}</strong>
+                  </span>
+                )}
+                {splitMode ? null : <span>Voortgang: <strong>{progress}%</strong></span>}
+                {splitMode ? null : <span>Totaal: <strong>{pickTotals.totalProducts}</strong></span>}
+                {splitMode ? null : <span>Nog te doen: <strong>{pickTotals.todoProducts}</strong></span>}
+                <span className={styles.clock}>{now}</span>
+              </div>
               {!splitMode && (
                 <div className={(styles as any).headerProgress}>
                   <i style={{ width: `${progress}%` }} />

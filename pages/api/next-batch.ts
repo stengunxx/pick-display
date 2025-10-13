@@ -84,15 +84,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     if (!batches) {
       console.log('attempts:', attempts);
-      return res.status(502).json({
-        step: 'list-batches',
+      return res.status(200).json({
+        step: 'error',
+        batchId: null,
+        batchIds: [],
+        batches: [],
         error: 'Kon geen lijst met batches ophalen van Picqer',
         attempts: attempts,
         hint: 'Controleer of jouw tenant picklist-batches of pickbatches gebruikt en of de API key toegang heeft.',
       });
     }
 
-    const open = (batches as any[]).filter((b: any) => OPEN_STATUSES.indexOf(String(b && b.status || '').toLowerCase()) !== -1);
+  const open = (batches as any[]).filter((b: any) => OPEN_STATUSES.indexOf(String(b && b.status || '').toLowerCase()) !== -1);
 
     if (open.length === 0) {
       return res.status(404).json({
@@ -114,19 +117,39 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
 
     const top = open.slice(0, 2);
-    const ids = top
-      .map(x => Number(x.id || x.idpicklist_batch))
-      .filter(n => Number.isFinite(n));
+    const batchMeta = top.map(batch => {
+      let creator = null;
+      if (batch.assigned_to && typeof batch.assigned_to === 'object') {
+        creator = batch.assigned_to.full_name || batch.assigned_to.username || batch.assigned_to.iduser || null;
+      } else {
+        creator = batch.created_by_name || batch.created_by || batch.user_name || batch.user || null;
+      }
+      return {
+        batchId: Number(batch.id || batch.idpicklist_batch),
+        createdBy: creator,
+        status: batch.status,
+        progress: batch.progress || null,
+      };
+    }).filter(b => Number.isFinite(b.batchId));
 
-    if (ids.length === 0) {
-      return res.status(500).json({ step: 'extract-id', error: 'Geen geldige batch IDs', first: open[0] });
+    if (batchMeta.length === 0) {
+      return res.status(200).json({
+        step: 'ok',
+        batchId: null,
+        batchIds: [],
+        batches: [],
+        error: 'Geen geldige batch IDs',
+        first: open[0],
+        debug: { chosen_statuses: [], attempts: attempts },
+      });
     }
 
     return res.status(200).json({
       step: 'ok',
-      batchId: ids[0],
-      batchIds: ids,
-      debug: { chosen_statuses: top.map(t => t.status), attempts: attempts },
+      batchId: batchMeta[0].batchId,
+      batchIds: batchMeta.map(b => b.batchId),
+      batches: batchMeta,
+      debug: { chosen_statuses: batchMeta.map(b => b.status), attempts: attempts },
     });
   } catch (err) {
     console.error('next-batch fatal:', err);
