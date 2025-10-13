@@ -192,23 +192,18 @@ export default function HomePage() {
     toastTimerRef.current = setTimeout(() => setToast(null), duration);
   };
   const showToastOnce = (key: string, text: string, cooldownMs = 5000) => {
-    const now = Date.now();
+    const tnow = Date.now();
     const last = shownKeysRef.current[key] || 0;
-    if (now - last >= cooldownMs) {
-      shownKeysRef.current[key] = now;
+    if (tnow - last >= cooldownMs) {
+      shownKeysRef.current[key] = tnow;
       showToast(text);
     }
   };
 
-  // fetching + empty-state stabilisatie
-  const [loading, setLoading] = useState(true); // alleen voor eerste fetch
-  const isFirstFetchRef = useRef(true);
-  const [emptyVisible, setEmptyVisible] = useState(false);
-  const emptyShowTimerRef = useRef<any>(null);
-
   // confetti/guards
   const [batchCompleteFx, setBatchCompleteFx] = useState(false);
   const wasActiveRef = useRef(false);
+  const completedLatchRef = useRef(false); // <— voorkomt herhaald trigggeren in lege fase
 
   // error state
   const [error, setError] = useState<string>('');
@@ -219,6 +214,9 @@ export default function HomePage() {
   const prevSkuRef = useRef<string>('');
   const prevBatchSkusRef = useRef<[string[], string[]] | string[]>([]);
 
+  // UI-mode
+  const [uiState, setUiState] = useState<'ACTIVE' | 'EMPTY'>('EMPTY');
+
   useEffect(() => {
     const t = setInterval(() => {
       const d = new Date();
@@ -227,14 +225,6 @@ export default function HomePage() {
     return () => clearInterval(t);
   }, []);
 
-  // wanneer empty zichtbaar wordt → eventuele toasts weg
-  useEffect(() => {
-    if (emptyVisible && toast) {
-      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-      setToast(null);
-    }
-  }, [emptyVisible, toast]);
-
   // Polling
   useEffect(() => {
     let unmounted = false;
@@ -242,8 +232,6 @@ export default function HomePage() {
 
     async function fetchOnce() {
       try {
-        if (isFirstFetchRef.current) setLoading(true);
-
         const bust = `_=${Date.now()}&rnd=${Math.random()}&nocache=${Math.random().toString(36).slice(2)}`;
 
         // 1) Haal open batchIds op
@@ -267,9 +255,12 @@ export default function HomePage() {
           }
         }
 
-        // Geen ids → empty-state direct tonen, geen vertraging, geen confetti/toast hier!
         if (!ids || ids.length === 0) {
-          setEmptyVisible(true);
+          // Geen batches → naar EMPTY zodra we hiervoor ACTIVE waren of al EMPTY zijn
+          if (uiState !== 'EMPTY') {
+            setUiState('EMPTY');
+          }
+          // maak alle active/pick state leeg
           setBatches([]);
           setPicklistId('');
           setProgress(0);
@@ -280,6 +271,14 @@ export default function HomePage() {
           setTotal(0);
           setNextLocations([]);
           setPrimaryCreatedBy(null);
+          wasActiveRef.current = false;
+
+          // zorg dat toast weg is in lege fase
+          if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+          setToast(null);
+
+          // blokkeer opnieuw 'completed' spammen tot we weer ACTIEF worden
+          completedLatchRef.current = true;
           return;
         }
 
@@ -351,16 +350,14 @@ export default function HomePage() {
         const primary = active[0] || null;
         const allDone = views.length > 0 && active.length === 0;
 
-  // Zodra we data hebben, empty niet tonen
-  setEmptyVisible(false);
-
         if (active.length > 0 && primary?.currentProduct) {
           // We hebben actieve picks
           if (!wasActiveRef.current) {
-            // nieuwe actieve fase → reset toast throttle, zodat “Nieuwe picklijst” weer kan
             shownKeysRef.current = {};
+            completedLatchRef.current = false; // we zijn weer actief, dus toekomstige complete mag weer triggeren
           }
           wasActiveRef.current = true;
+          if (uiState !== 'ACTIVE') setUiState('ACTIVE');
 
           // SPLIT: state + mini-effecten
           setBatches(active);
@@ -402,12 +399,14 @@ export default function HomePage() {
           const doneVal = primary.done;
           const skuVal = primary.sku || '';
 
+          // locatie wissel
           if (prevLocRef.current && prevLocRef.current !== loc) {
             setSingleFx((s) => ({ ...s, locPulse: true }));
             setTimeout(() => setSingleFx((s) => ({ ...s, locPulse: false })), 520);
           }
           prevLocRef.current = loc;
 
+          // done toename
           if (prevDoneRef.current >= 0 && doneVal > prevDoneRef.current) {
             setSingleFx((s) => ({ ...s, bump: true }));
             setTimeout(() => setSingleFx((s) => ({ ...s, bump: false })), 1000);
@@ -415,7 +414,7 @@ export default function HomePage() {
           prevDoneRef.current = doneVal;
           prevSkuRef.current = skuVal;
 
-          // Detecteer nieuwe picklijst op basis van item SKUs → throttle per batchId
+          // Detecteer nieuwe picklijst
           const currentSkus = Array.isArray(primary.items)
             ? primary.items.map((it) => String(it.productcode ?? it.sku ?? ''))
             : [];
@@ -441,14 +440,18 @@ export default function HomePage() {
           setNextLocations(primary.nextLocations);
           setPrimaryCreatedBy(primary.createdBy ?? null);
         } else if (allDone) {
-          // batches bestaan maar alles is gepickt ⇒ éénmalige completed feedback + direct naar empty-state
-          if (wasActiveRef.current) {
+          // Alles gepickt in de teruggegeven batches
+          if (wasActiveRef.current && !completedLatchRef.current) {
+            completedLatchRef.current = true; // latch zodat we dit slechts één keer doen
             wasActiveRef.current = false;
-            showToastOnce('completed', 'Batch voltooid', 5000);
+
+            // feedback
+            showToast('Batch voltooid', 1200);
             if (!batchCompleteFx) setBatchCompleteFx(true);
             setTimeout(() => setBatchCompleteFx(false), 1000);
 
-            // UI opschonen en direct empty tonen
+            // DIRECT naar lege staat en oude product UI opruimen
+            setUiState('EMPTY');
             setBatches([]);
             setCurrentProduct(null);
             setDataItems([]);
@@ -459,29 +462,30 @@ export default function HomePage() {
             setPicklistId('');
             setProgress(0);
             setPrimaryCreatedBy(null);
-            setError('');
-            setEmptyVisible(true);
+
+            // na het legen: geen lingering toast
+            setTimeout(() => {
+              if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+              setToast(null);
+            }, 1300);
+          } else {
+            // al leeg of al gelatcht → niets doen
+            if (uiState !== 'EMPTY') setUiState('EMPTY');
           }
         } else {
-          // tijdelijke tussenfase → even geen empty tonen
-          if (emptyShowTimerRef.current) clearTimeout(emptyShowTimerRef.current);
-          setEmptyVisible(false);
+          // Tussenfase (we kregen ids, maar nog geen items met currentProduct) → niets forceren.
+          // UI blijft staan waar hij is; geen EMPTY wissel hier.
         }
 
         setError('');
       } catch (e: any) {
         setError(e?.message || 'Er ging iets mis.');
-      } finally {
-        if (isFirstFetchRef.current) {
-          setLoading(false);
-          isFirstFetchRef.current = false;
-        }
       }
     }
 
     const loop = async () => {
       await fetchOnce();
-      if (!unmounted) timer = setTimeout(loop, 100);
+      if (!unmounted) timer = setTimeout(loop, 100); // 100ms poll
     };
 
     loop();
@@ -489,9 +493,8 @@ export default function HomePage() {
       unmounted = true;
       if (timer) clearTimeout(timer);
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-      if (emptyShowTimerRef.current) clearTimeout(emptyShowTimerRef.current);
     };
-  }, [batchCompleteFx]);
+  }, [batchCompleteFx, uiState]);
 
   const splitMode = batches.filter((b) => b && b.currentProduct).length >= 2;
 
@@ -503,8 +506,7 @@ export default function HomePage() {
     return { totalProducts, todoProducts };
   }, [dataItems, total, done]);
 
-  const hasActive = splitMode || !!currentProduct;
-  const shouldShowEmpty = !splitMode && !currentProduct && (!batches.length || batches.every(b => !b.currentProduct));
+  const showEmpty = uiState === 'EMPTY' && !splitMode && !currentProduct;
 
   /* ===================== RENDER ===================== */
 
@@ -677,7 +679,7 @@ export default function HomePage() {
               )}
             </div>
           </div>
-        ) : shouldShowEmpty ? (
+        ) : showEmpty ? (
           <div style={{ textAlign: 'center', marginTop: 64, color: '#888', fontSize: '1.5rem', fontWeight: 500 }}>
             Geen actieve batch of pickdata gevonden.
             <br />
