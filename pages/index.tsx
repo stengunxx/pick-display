@@ -1,45 +1,26 @@
 // pages/index.tsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import styles from '../styles/PickDisplay.module.css';
 import { zoneColor, zoneOf } from '../lib/picqer';
 
-/* ===================== TUNABLES ===================== */
-const POLL_MS = 220;             // hoofd polling interval
-const FETCH_TIMEOUT_MS = 900;    // timeout per request
-const CONFETTI_MS = 1000;        // confetti duur (ms)
-const TOAST_MS = 1200;           // toast duur (ms)
-const NO_ID_STREAK_MAX = 2;      // pas leeg tonen na X polls zonder batchIds (anti-flikker)
+/* ===== performance knobs ===== */
+const BASE_POLL_MS = 220;
+const BURST_POLL_MS = 80;
+const BURST_WINDOW_MS = 2000;
+const TIMEOUT_MS = 900;
+const EMPTY_GRACE_MS = 400;
+const STICKY_KEEP_MS = 5000;      // houd laatst bekende batchId nog even vast
+const NEW_BANNER_MS = 1600;
+const PICKLIST_CONFETTI_MS = 900; // mini
+const BATCH_CONFETTI_MS = 1400;   // groot
 
-/* ===================== TYPES & UTILS ===================== */
-type BatchView = {
-  batchId: string | number;
-  currentProduct: any | null;
-  product: string;
-  sku: string;
-  done: number;
-  total: number;
-  progress: number;
-  nextLocations: string[];
-  items: any[];
-  totalProducts: number;
-  todoProducts: number;
-  createdBy?: string | null;
-};
-type MiniFxMap = Record<string, { locPulse?: boolean; bump?: boolean; __loc?: string; __done?: number }>;
-
+/* ===== utils ===== */
 const collator = new Intl.Collator('nl', { numeric: true, sensitivity: 'base' });
 const locOf    = (it: any) => (it?.stocklocation ?? it?.stock_location ?? '').toString();
 const pickedOf = (it: any) => Number(it?.amountpicked ?? it?.amount_picked ?? 0);
 const totalOf  = (it: any) => Number(it?.amount ?? it?.amount_to_pick ?? 0);
+const remOf    = (it: any) => Math.max(0, totalOf(it) - pickedOf(it));
 
-function getInitials(name?: string | null) {
-  if (!name) return '—';
-  return name.split(/\s+/).filter(Boolean).slice(0, 2).map(p => p[0]?.toUpperCase() ?? '').join('');
-}
-function signOut({ callbackUrl }: { callbackUrl: string }) {
-  window.location.href = callbackUrl;
-}
-async function fetchJson(url: string, timeoutMs: number, signal?: AbortSignal) {
+async function fetchJson(url: string, timeoutMs: number, abort?: AbortSignal) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort('timeout'), timeoutMs);
   try {
@@ -51,155 +32,164 @@ async function fetchJson(url: string, timeoutMs: number, signal?: AbortSignal) {
         Expires: '0',
         'x-no-cache': '1',
       },
-      signal: signal ?? ctrl.signal,
+      signal: abort ?? ctrl.signal,
     });
-    const text = await res.text();
-    if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
-    return text ? JSON.parse(text) : null;
-  } finally {
-    clearTimeout(t);
-  }
+    const txt = await res.text();
+    if (!res.ok) throw new Error(`HTTP ${res.status}: ${txt.slice(0, 160)}`);
+    return txt ? JSON.parse(txt) : null;
+  } finally { clearTimeout(t); }
 }
 
-/* ===================== DUMB COMPONENTS ===================== */
-function ProductImage({ item, max, radius, alt }: { item: any; max?: number; radius?: number; alt?: string }) {
+/* ===== visuals ===== */
+function ProductImage({ item, size = 200 }: { item: any; size?: number }) {
   const url = item?.imageUrl || item?.image_url || item?.image || '';
   return (
     <img
       src={url || '/placeholder.png'}
-      alt={alt || 'Product'}
-      style={{ width: max || 64, height: max || 64, borderRadius: radius || 8, objectFit: 'cover', background: '#eee' }}
+      alt={item?.product || item?.name || 'Product'}
+      style={{
+        width: size, height: size, borderRadius: 18,
+        objectFit: 'cover', background: '#f2f2f2', border: '1px solid #e5e5e5'
+      }}
     />
   );
 }
 
-function RenderBatchMini({ b, fx }: { b: BatchView; fx?: { locPulse?: boolean; bump?: boolean } }) {
-  if (!b) return null;
-  const cur = b.currentProduct;
-  const loc = cur ? String(cur.stocklocation ?? cur.stock_location ?? '—') : '—';
-  const parts = loc.split(/[.\s-]+/).filter(Boolean);
+function BigRow({ it }: { it: any }) {
+  if (!it) return <RowSkeleton />;
+  const name = it?.product ?? it?.name ?? it?.title ?? it?.omschrijving ?? it?.description ?? '—';
+  const sku  = it?.productcode ?? it?.sku ?? '—';
+  const loc  = String(it?.stocklocation ?? it?.stock_location ?? '—');
+  const segs = loc.split(/[.\s-]+/).filter(Boolean);
+  const tot  = totalOf(it);
+  const done = pickedOf(it);
 
   return (
-    <div className={styles.panel}>
-      <div className={styles.panelCard}>
-        <div className={`${styles.heroLoc} ${fx?.locPulse ? styles.heroLocPulse : ''}`} style={{ ['--zone' as any]: zoneColor(loc) }} aria-label={`Locatie ${loc}`}>
-          <span className={styles.zoneBadge}>{zoneOf(loc) || '–'}</span>
-          <div className={styles.locSegWrap}>
-            {parts.length ? parts.map((p, i) => <span key={p + i} className={styles.locSeg}>{p}</span>) : <span className={styles.locSeg}>—</span>}
-          </div>
-        </div>
-
-        <div className={styles.miniHeader}>
-          <div className={styles.miniMetaLeft}>
-            <span className={styles.batchId}>Batch #{String(b.batchId)}</span>
-            <span className={styles.dot}>•</span>
-            <span>Voortgang: {b.progress}%</span>
-          </div>
-          <div className={styles.miniMetaCenter}>
-            {b.createdBy && (
-              <span className={styles.creatorTag} title={`Aangemaakt door ${b.createdBy}`}>
-                <span className={styles.creatorDotSm} aria-hidden="true">{getInitials(b.createdBy)}</span>
-                <span className={styles.creatorNameSm}>{b.createdBy}</span>
+    <div style={S.row}>
+      <div style={S.left}><ProductImage item={it} size={200} /></div>
+      <div style={S.mid}>
+        <div style={S.locWrap}>
+          <div style={{ ...S.zoneMega, background: zoneColor(loc) || '#ffd166' }}>{zoneOf(loc) || '–'}</div>
+          <div style={S.locMegaLine}>
+            {segs.length ? segs.map((s, i) => (
+              <span key={s + i} style={S.locMegaSeg}>
+                {s}{i < segs.length - 1 && <span style={S.locMegaDot}>•</span>}
               </span>
-            )}
-          </div>
-          <div className={styles.miniProgress}><i style={{ width: `${Math.max(0, Math.min(100, b.progress || 0))}%` }} /></div>
-        </div>
-
-        <div className={styles.panelGrid}>
-          <div className={styles.colLeft}>
-            <div className={styles.imageWellSm} style={{ ['--zone' as any]: zoneColor(loc) }}>
-              <ProductImage item={cur} max={72} radius={12} alt={cur?.product || cur?.name || 'Productfoto'} />
-            </div>
-            <div className={styles.skuBadge}>SKU: <b>{b.sku || '—'}</b></div>
-          </div>
-          <div className={styles.colCenter}>
-            <div className={styles.productNameSplit}>{b.product || '—'}</div>
-            {typeof b.totalProducts === 'number' && typeof b.todoProducts === 'number' && (
-              <div className={styles.miniTotals}>
-                <span>Nog te doen: <b>{b.todoProducts}</b></span>
-                <span className={styles.dot}>•</span>
-                <span>Totaal: <b>{b.totalProducts}</b></span>
-              </div>
-            )}
-          </div>
-          <div className={styles.colRight}>
-            <div className={`${styles.countPill} ${fx?.bump ? styles.pillFlashSm : ''}`}>
-              <div className={styles.countValue}>{b.done}</div>
-              <div className={styles.countLabel}>Gedaan</div>
-            </div>
-            <div className={`${styles.countPill} ${styles.countPillMuted}`}>
-              <div className={styles.countValue}>{b.total}</div>
-              <div className={styles.countLabel}>Totaal</div>
-            </div>
+            )) : <span style={{ color: '#94a3b8' }}>—</span>}
           </div>
         </div>
-
-        {!!b.nextLocations?.length && (
-          <div className={styles.nextStrip}>
-            <div className={styles.nextStripTitle}>Volgende locaties</div>
-            <div className={styles.nextStripScroller}>
-              {b.nextLocations.map((L, i) => (
-                <span key={L + i} className={styles.chipSmall} style={{ ['--zone' as any]: zoneColor(L) }}>{L}</span>
-              ))}
-            </div>
+        <div style={S.title}>{name}</div>
+        <div style={S.skuLine}>
+          <span style={S.skuLabel}>SKU</span><span style={S.skuVal}>{sku}</span>
+        </div>
+      </div>
+      <div style={S.vDivider} />
+      <div style={S.right}>
+        <div style={S.counterCard}>
+          <div style={S.counterTop}>
+            <span style={S.counterDone}>{done}</span>
+            <span style={S.counterSlash}>/</span>
+            <span style={S.counterTot}>{tot}</span>
           </div>
-        )}
+          <div style={S.counterLbl}>GEPIKT / TOTAAL</div>
+        </div>
+        <div style={S.progressOuter}>
+          <div style={{ ...S.progressFillGreen, width: `${tot > 0 ? Math.min(100, (done / tot) * 100) : 0}%` }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+function RowSkeleton() {
+  return (
+    <div style={S.row}>
+      <div style={S.left}><div style={S.skelImg} /></div>
+      <div style={S.mid}>
+        <div style={S.skelTitleBig} />
+        <div style={S.skelLine} />
+        <div style={S.skelLineShort} />
+      </div>
+      <div style={S.vDivider} />
+      <div style={S.right}>
+        <div style={S.counterCard}><div style={S.skelCounter} /></div>
+        <div style={S.progressOuter}><div style={{ ...S.progressFillGreen, width: '0%' }} /></div>
       </div>
     </div>
   );
 }
 
-/* ===================== PAGE ===================== */
-export default function HomePage() {
-  const [debug, setDebug] = useState(false);
-  const [xl, setXl] = useState(false);
+/* duidelijke confetti (mini of groot via prop) */
+function ConfettiBurst({ count = 120 }: { count?: number }) {
+  const pieces = Array.from({ length: count }).map((_, i) => {
+    const left = Math.random() * 100;
+    const size = 6 + Math.random() * 10;
+    const rot  = Math.random() * 360;
+    const dur  = 900 + Math.random() * 900;
+    const delay = Math.random() * 120;
+    const colors = ['#10b981', '#22c55e', '#16a34a', '#86efac', '#34d399', '#059669', '#f59e0b', '#ef4444', '#3b82f6'];
+    const bg = colors[i % colors.length];
+    return (
+      <div
+        key={i}
+        style={{
+          position: 'fixed',
+          top: -20,
+          left: `${left}vw`,
+          width: size,
+          height: size * (0.5 + Math.random()),
+          background: bg,
+          transform: `rotate(${rot}deg)`,
+          borderRadius: 3,
+          opacity: 0.95,
+          zIndex: 9999,
+          pointerEvents: 'none',
+          animation: `cf-fall ${dur}ms ease-in ${delay}ms forwards`,
+        }}
+      />
+    );
+  });
+  return (
+    <>
+      <style>{`
+        @keyframes cf-fall {
+          0% { transform: translateY(-40px) rotate(0deg); opacity: .98; }
+          70% { opacity: .98; }
+          100% { transform: translateY(100vh) rotate(720deg); opacity: 0; }
+        }
+      `}</style>
+      {pieces}
+    </>
+  );
+}
 
-  // header
+/* ===== page ===== */
+export default function IndexPage() {
+  const [picklistId, setPicklistId] = useState<string>('—');
+  const [creator, setCreator] = useState<string | null>(null);
+  const [items, setItems] = useState<any[]>([]);
+  const [phase, setPhase] = useState<'ACTIVE' | 'COMPLETED' | 'EMPTY'>('EMPTY');
+
+  // FX
+  const [confettiCount, setConfettiCount] = useState<number | null>(null);
+  const [banner, setBanner] = useState<string | null>(null);
+
+  // timers/refs
+  const loopRef = useRef<any>(null);
+  const inflightRef = useRef<AbortController | null>(null);
+  const burstUntilRef = useRef(0);
+  const lastGoodItemsRef = useRef<{ ts: number; items: any[] } | null>(null);
+
+  // batch/picklist tracking
+  const prevBatchIdRef = useRef<string>('');
+  const stickyBatchRef = useRef<{ id: string; ts: number } | null>(null);
+  const prevPicklistIdRef = useRef<string>('');
+  const prevPickTodoRef = useRef<number>(-1);
+
+  const idAbsentSinceRef = useRef<number>(0);
+  const armedBatchConfettiRef = useRef(false);
+
+  /* clock */
   const [now, setNow] = useState('');
-  const [picklistId, setPicklistId] = useState<string>('');
-  const [progress, setProgress] = useState(0);
-
-  // single view
-  const [currentProduct, setCurrentProduct] = useState<any | null>(null);
-  const [dataItems, setDataItems] = useState<any[]>([]);
-  const [sku, setSku] = useState('');
-  const [done, setDone] = useState(0);
-  const [total, setTotal] = useState(0);
-  const [nextLocations, setNextLocations] = useState<string[]>([]);
-  const [primaryCreatedBy, setPrimaryCreatedBy] = useState<string | null>(null);
-
-  // split view
-  const [batches, setBatches] = useState<BatchView[]>([]);
-  const [miniFx, setMiniFx] = useState<MiniFxMap>({});
-
-  // fx & toast
-  const [singleFx, setSingleFx] = useState<{ locPulse: boolean; bump: boolean }>({ locPulse: false, bump: false });
-  const [batchCompleteFx, setBatchCompleteFx] = useState(false);
-  const [toast, setToast] = useState<{ text: string } | null>(null);
-  const toastTimerRef = useRef<any>(null);
-  const showToast = (text: string, ms = TOAST_MS) => {
-    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
-    setToast({ text });
-    toastTimerRef.current = setTimeout(() => setToast(null), ms);
-  };
-
-  // fase-machine
-  type Phase = 'ACTIVE' | 'COMPLETED' | 'EMPTY';
-  const [phase, setPhase] = useState<Phase>('EMPTY');
-
-  // guards & refs
-  const prevLocRef = useRef('');
-  const prevDoneRef = useRef<number>(-1);
-  const prevSkusRef = useRef<string[]>([]);
-  const completionArmedRef = useRef(false); // set true wanneer we actieve picks hebben
-  const noIdStreakRef = useRef(0);
-
-  // loop controls
-  const loopTimerRef = useRef<any>(null);
-  const inFlightRef = useRef<AbortController | null>(null);
-
-  // klok
   useEffect(() => {
     const t = setInterval(() => {
       const d = new Date();
@@ -208,382 +198,323 @@ export default function HomePage() {
     return () => clearInterval(t);
   }, []);
 
-  const splitMode = batches.filter(b => b && b.currentProduct).length >= 2;
+  const openItems = useMemo(() => items.filter(it => remOf(it) > 0), [items]);
+  const top3 = useMemo(() => {
+    const three = openItems.slice(0, 3);
+    return three.concat(Array(Math.max(0, 3 - three.length)).fill(null));
+  }, [openItems]);
 
-  const pickTotals = useMemo(() => {
-    const items = Array.isArray(dataItems) ? dataItems : [];
-    if (!items.length) return { totalProducts: total, todoProducts: Math.max(0, total - done) };
-    const totalProducts = items.reduce((s, it) => s + totalOf(it), 0);
-    const todoProducts  = items.reduce((s, it) => s + Math.max(0, totalOf(it) - pickedOf(it)), 0);
-    return { totalProducts, todoProducts };
-  }, [dataItems, total, done]);
+  /* header totals */
+  const total = items.reduce((s, it) => s + totalOf(it), 0);
+  const done  = items.reduce((s, it) => s + pickedOf(it), 0);
+  const todo  = Math.max(0, total - done);
+  const progress = total > 0 ? Math.round((done / total) * 100) : 0;
 
-  const switchToEmptyUI = () => {
-    setBatches([]);
-    setPicklistId('');
-    setProgress(0);
-    setCurrentProduct(null);
-    setDataItems([]);
-    setSku('');
-    setDone(0);
-    setTotal(0);
-    setNextLocations([]);
-    setPrimaryCreatedBy(null);
-    setPhase('EMPTY');
+  const showBanner = (text: string, ms = NEW_BANNER_MS) => {
+    setBanner(text);
+    setTimeout(() => setBanner(null), ms);
+  };
+  const burst = (ms = BURST_WINDOW_MS) => {
+    burstUntilRef.current = Math.max(burstUntilRef.current, performance.now() + ms);
+  };
+  const firePicklistCompleted = () => {
+    setConfettiCount(90); // mini
+    showBanner('Picklijst voltooid', NEW_BANNER_MS);
+    setTimeout(() => setConfettiCount(null), PICKLIST_CONFETTI_MS);
+    burst(1600);
+  };
+  const fireBatchCompleted = () => {
+    setConfettiCount(170); // groot
+    showBanner('Batch voltooid', NEW_BANNER_MS);
+    setTimeout(() => setConfettiCount(null), BATCH_CONFETTI_MS);
+    setPhase('COMPLETED');
+    burst(2000);
   };
 
+  const switchToEmpty = () => {
+    setPhase('EMPTY');
+    setItems([]);
+    setPicklistId('—');
+    setCreator(null);
+  };
+
+  /* polling loop */
   useEffect(() => {
     let unmounted = false;
 
-    const loop = async () => {
+    const schedule = () => {
       if (unmounted) return;
+      const fast = performance.now() < burstUntilRef.current;
+      const delay = fast ? BURST_POLL_MS : BASE_POLL_MS;
+      loopRef.current = setTimeout(tick, delay);
+    };
 
-      // abort lopende fetch
-      if (inFlightRef.current) { inFlightRef.current.abort(); inFlightRef.current = null; }
+    const currentBatchIdOrSticky = (ids: (string | number)[] | null | undefined) => {
+      if (ids && ids.length > 0) {
+        const id = String(ids[0]);
+        stickyBatchRef.current = { id, ts: Date.now() };
+        return id;
+      }
+      // geen ids? gebruik sticky zolang niet verlopen
+      if (stickyBatchRef.current && Date.now() - stickyBatchRef.current.ts < STICKY_KEEP_MS) {
+        return stickyBatchRef.current.id;
+      }
+      return null;
+    };
+
+    const tick = async () => {
+      if (unmounted) return;
+      if (inflightRef.current) inflightRef.current.abort();
       const aborter = new AbortController();
-      inFlightRef.current = aborter;
+      inflightRef.current = aborter;
 
       try {
-        const bust = `_=${Date.now()}&t=${performance.now().toFixed(3)}`;
+        const bustQ = `_=${Date.now()}&t=${performance.now().toFixed(3)}`;
+        const nb = await fetchJson(`/api/next-batch?${bustQ}`, TIMEOUT_MS, aborter.signal);
 
-        // 1) IDs ophalen
-        const j = await fetchJson(`/api/next-batch?${bust}`, FETCH_TIMEOUT_MS, aborter.signal);
-        const ids: (string | number)[] = Array.isArray(j?.batchIds) ? j.batchIds : (j?.batchId ? [j.batchId] : []);
+        const ids: (string | number)[] = Array.isArray(nb?.batchIds)
+          ? nb.batchIds
+          : (nb?.batchId ? [nb.batchId] : []);
 
-        if (!ids || ids.length === 0) {
-          // geen ids → tel korte streak tegen flikker
-          noIdStreakRef.current += 1;
-          if (noIdStreakRef.current >= NO_ID_STREAK_MAX) {
-            completionArmedRef.current = false;
-            if (toastTimerRef.current) { clearTimeout(toastTimerRef.current); setToast(null); }
-            setBatchCompleteFx(false);
-            switchToEmptyUI();
+        const chosen = currentBatchIdOrSticky(ids);
+
+        if (!chosen) {
+          if (!idAbsentSinceRef.current) idAbsentSinceRef.current = Date.now();
+          // als we net klaar waren en er is echt niets → batch confetti vuren (als gewapend)
+          if (armedBatchConfettiRef.current) {
+            fireBatchCompleted();
+            armedBatchConfettiRef.current = false;
           }
-        } else {
-          noIdStreakRef.current = 0;
-
-          // 2) Picks ophalen
-          const picks = await Promise.all(
-            ids.slice(0, 2).map((id) =>
-              fetchJson(`/api/next-pick?batchId=${id}&${bust}`, FETCH_TIMEOUT_MS, aborter.signal).catch(() => null)
-            )
-          );
-
-          // createdBy-map
-          const createdByMap = new Map<string, string | null>();
-          if (Array.isArray(j?.batches)) {
-            for (const b of j.batches) {
-              const bid = String(b?.batchId ?? '');
-              if (bid) createdByMap.set(bid, b?.createdBy ?? null);
-            }
-          }
-
-          // 3) Views bouwen
-          const views: BatchView[] = [];
-          for (let i = 0; i < picks.length; i++) {
-            const p = picks[i] as any;
-            if (!p) continue;
-
-            const items: any[] = Array.isArray(p.items)
-              ? p.items.slice().sort((a: any, b: any) => collator.compare(locOf(a), locOf(b)))
-              : [];
-
-            const cur = items.find((it) => pickedOf(it) < totalOf(it)) ?? null;
-
-            const prog = items.length
-              ? Math.round((items.filter((it) => pickedOf(it) >= totalOf(it)).length / items.length) * 100)
-              : 0;
-
-            let nextLocs: string[] = [];
-            if (cur) {
-              const curIdx = items.findIndex((x) => x === cur);
-              const curLoc = locOf(cur);
-              const seen = new Set<string>();
-              nextLocs = items
-                .map((it, idx) => ({ it, idx }))
-                .filter(({ it, idx }) => idx > curIdx && pickedOf(it) < totalOf(it))
-                .map(({ it }) => locOf(it))
-                .filter((loc) => loc && loc !== curLoc && (seen.has(loc) ? false : (seen.add(loc), true)));
-            }
-
-            const totalProducts = items.reduce((s, it) => s + totalOf(it), 0);
-            const todoProducts  = items.reduce((s, it) => s + Math.max(0, totalOf(it) - pickedOf(it)), 0);
-
-            views.push({
-              batchId: ids[i],
-              createdBy: createdByMap.get(String(ids[i])) ?? null,
-              currentProduct: cur,
-              product: (cur?.product ?? cur?.name ?? cur?.title ?? cur?.omschrijving ?? cur?.description ?? p.product ?? '') as string,
-              sku: (cur?.productcode ?? cur?.sku ?? '') as string,
-              done: cur ? pickedOf(cur) : 0,
-              total: cur ? totalOf(cur) : 0,
-              progress: prog,
-              nextLocations: nextLocs,
-              items,
-              totalProducts,
-              todoProducts,
-            });
-          }
-
-          const todoSum = views.reduce((s, v) => s + Math.max(0, v.todoProducts || 0), 0);
-          const hasViews = views.length > 0;
-          const hasActive = hasViews && todoSum > 0;
-          const allDoneNow = hasViews && todoSum === 0;
-
-          /* ======= STATE MACHINE ======= */
-          if (hasActive) {
-            // ACTIVE
-            if (phase !== 'ACTIVE') {
-              setPhase('ACTIVE');
-              completionArmedRef.current = true;           // vanaf hier mag completion weer triggeren
-              // stop eventueel lingering UI
-              if (toastTimerRef.current) { clearTimeout(toastTimerRef.current); setToast(null); }
-              setBatchCompleteFx(false);
-            }
-
-            // kies primary
-            const active = views.filter(v => v.todoProducts > 0 && v.currentProduct);
-            const primary = (active[0] ?? views.find(v => v.todoProducts > 0))!;
-
-            // header
-            setPicklistId(String(primary.batchId));
-            setProgress(primary.progress);
-
-            // animaties
-            const loc = String(primary.currentProduct?.stocklocation ?? primary.currentProduct?.stock_location ?? '');
-            const doneVal = primary.done;
-            if (prevLocRef.current && prevLocRef.current !== loc) {
-              setSingleFx(s => ({ ...s, locPulse: true }));
-              setTimeout(() => setSingleFx(s => ({ ...s, locPulse: false })), 360);
-            }
-            prevLocRef.current = loc;
-            if (prevDoneRef.current >= 0 && doneVal > prevDoneRef.current) {
-              setSingleFx(s => ({ ...s, bump: true }));
-              setTimeout(() => setSingleFx(s => ({ ...s, bump: false })), 520);
-            }
-            prevDoneRef.current = doneVal;
-
-            // nieuwe picklijst?
-            const currentSkus = Array.isArray(primary.items) ? primary.items.map(it => String(it.productcode ?? it.sku ?? '')) : [];
-            if (prevSkusRef.current.length && currentSkus.length && prevSkusRef.current.join('|') !== currentSkus.join('|')) {
-              showToast('Nieuwe picklijst', 900);
-            }
-            prevSkusRef.current = currentSkus;
-
-            // miniFx + batches
-            setBatches(active.length ? active : views);
-            setMiniFx(prev => {
-              const list = active.length ? active : views;
-              const next: MiniFxMap = { ...prev };
-              for (const v of list) {
-                if (!v.currentProduct) continue;
-                const id = String(v.batchId);
-                const locNow = String(v.currentProduct?.stocklocation ?? v.currentProduct?.stock_location ?? '');
-                const d = Number(v.done ?? 0);
-                const prevKey = `${(prev as any)[id]?.__loc ?? ''}|${(prev as any)[id]?.__done ?? -1}`;
-                const locChanged = prevKey.split('|')[0] !== locNow;
-                const doneIncreased = Number(prevKey.split('|')[1]) < d;
-                next[id] = { locPulse: !!locChanged, bump: !!doneIncreased };
-                (next as any)[id].__loc = locNow;
-                (next as any)[id].__done = d;
-                setTimeout(() => {
-                  setMiniFx(curr => ({ ...curr, [id]: { ...(curr[id] || {}), locPulse: false, bump: false } }));
-                }, locChanged ? 420 : 260);
-              }
-              Object.keys(next).forEach(k => { if (!views.some(v => String(v.batchId) === String(k))) delete (next as any)[k]; });
-              return next;
-            });
-
-            // single data
-            setCurrentProduct(primary.currentProduct ?? null);
-            setDataItems(Array.isArray(primary.items) ? primary.items : []);
-            setSku(primary.sku);
-            setDone(primary.done);
-            setTotal(primary.total);
-            setNextLocations(primary.nextLocations);
-            setPrimaryCreatedBy(primary.createdBy ?? null);
-
-          } else if (allDoneNow) {
-            // DIRECT naar COMPLETED als we ge-armed waren
-            if (completionArmedRef.current && phase !== 'COMPLETED') {
-              completionArmedRef.current = false; // disarm, éénmalig
-              setPhase('COMPLETED');
-              setBatchCompleteFx(true);
-              showToast('Batch voltooid', TOAST_MS);
-
-              // meteen doorzetten naar EMPTY na confetti
-              setTimeout(() => {
-                setBatchCompleteFx(false);
-                switchToEmptyUI();
-              }, CONFETTI_MS);
-            }
-          } else {
-            // Geen views → laat huidige UI staan; ID-streak regelt lege staat
-          }
+          if (Date.now() - idAbsentSinceRef.current >= EMPTY_GRACE_MS) switchToEmpty();
+          return schedule();
         }
+        idAbsentSinceRef.current = 0;
+
+        // Nieuwe batch?
+        if (!prevBatchIdRef.current || prevBatchIdRef.current !== chosen) {
+          prevBatchIdRef.current = chosen;
+          armedBatchConfettiRef.current = true; // na deze batch mag batch-confetti
+          // “Nieuwe batch” is optioneel; belangrijker is “Nieuwe picklijst” beneden
+          burst();
+        }
+
+        // creator label (optioneel)
+        let createdBy: string | null = null;
+        if (Array.isArray(nb?.batches)) {
+          const meta = nb.batches.find((b: any) => String(b?.batchId ?? '') === chosen);
+          createdBy = meta?.createdBy ?? null;
+        }
+
+        // haal items (en picklist-debug) op
+        const p = await fetchJson(`/api/next-pick?batchId=${chosen}&${bustQ}`, TIMEOUT_MS, aborter.signal);
+
+        if (p && p.done === true) {
+          // backend zegt: hele batch is klaar
+          if (armedBatchConfettiRef.current) {
+            fireBatchCompleted();
+            armedBatchConfettiRef.current = false;
+          }
+          // we blijven even turbo zoeken naar volgende batch
+          return schedule();
+        }
+
+        // normaliseer items
+        let arr: any[] = Array.isArray(p?.items)
+          ? p.items.slice().sort((a: any, b: any) => collator.compare(locOf(a), locOf(b)))
+          : [];
+
+        // SWR tegen flikkers
+        if ((!arr || arr.length === 0) && lastGoodItemsRef.current && (Date.now() - lastGoodItemsRef.current.ts) < 1200) {
+          arr = lastGoodItemsRef.current.items;
+        } else if (arr && arr.length > 0) {
+          lastGoodItemsRef.current = { ts: Date.now(), items: arr };
+        }
+
+        const debugPickId = String(p?.debug?.picklistId ?? '');
+        const todoNow = arr.reduce((s, it) => s + remOf(it), 0);
+
+        // ===== PICKLIJST-SPECIFIEK: detecteer einde
+        if (debugPickId) {
+            // nieuwe picklijst verschenen (id switch)?
+            if (prevPicklistIdRef.current && prevPicklistIdRef.current !== debugPickId) {
+              // net geswitcht → toon “Nieuwe picklijst”
+              showBanner('Nieuwe picklijst', NEW_BANNER_MS);
+              setConfettiCount(60); // klein burstje
+              setTimeout(() => setConfettiCount(null), PICKLIST_CONFETTI_MS);
+              burst();
+              // reset todo-tracker voor nieuwe picklijst
+              prevPickTodoRef.current = -1;
+            }
+
+            // todo voortgang binnen *deze* picklijst
+            if (prevPicklistIdRef.current === debugPickId || !prevPicklistIdRef.current) {
+              if (prevPickTodoRef.current !== -1 && prevPickTodoRef.current > 0 && todoNow === 0) {
+                // deze picklijst is nu klaar -> mini confetti
+                firePicklistCompleted();
+                // we verwachten dat backend snel de volgende picklijst serveert → blijf in ACTIVE
+              }
+              prevPickTodoRef.current = todoNow;
+            }
+
+            // onthoud actuele picklistId
+            prevPicklistIdRef.current = debugPickId;
+        }
+
+        // ===== UI set
+        setPicklistId(chosen);
+        setCreator(createdBy);
+        setItems(arr);
+        if (arr.length > 0 && phase !== 'ACTIVE') setPhase('ACTIVE');
+
+        // ===== Batch klaar “arming” / undo
+        if (todoNow === 0) {
+          // alles van huidige picklijst klaar; batch kan nog doorlopen → wacht op done:true of picklist switch
+          // maar “armed” blijft aan tot we werkelijk geen ids meer hebben of backend done:true terugstuurt
+        } else {
+          // er is werk → als we eerder batch-complete confetti gewapend hadden en jij drukte op (–),
+          // dan blijven we gewoon ACTIVE (niet naar EMPTY).
+          if (phase === 'COMPLETED') setPhase('ACTIVE');
+        }
+
+        // burst bij meetbare verandering
+        if (prevPickTodoRef.current !== -1 && prevPickTodoRef.current !== todoNow) burst();
+
       } catch {
-        // fout/timeout → UI laten zoals hij is
+        // negeren
       } finally {
-        loopTimerRef.current = setTimeout(loop, POLL_MS);
+        schedule();
       }
     };
 
-    loop();
+    tick();
     return () => {
       unmounted = true;
-      if (loopTimerRef.current) clearTimeout(loopTimerRef.current);
-      if (inFlightRef.current) inFlightRef.current.abort();
-      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+      if (loopRef.current) clearTimeout(loopRef.current);
+      if (inflightRef.current) inflightRef.current.abort();
     };
   }, [phase]);
 
-  const showEmpty = phase === 'EMPTY' && !splitMode && !currentProduct;
-
-  /* ===================== RENDER ===================== */
   return (
-    <div className={`${styles.root} ${xl ? styles.distanceOn : ''}`}>
-      {/* Confetti */}
-      {batchCompleteFx && (
-        <div className={styles.batchCompleteConfetti}>
-          <div className={styles.batchCompleteGlow} />
-          <div className={styles.confettiDot} style={{ left: '18%', top: '22%' }} />
-          <div className={styles.confettiDot} style={{ left: '38%', top: '66%' }} />
-          <div className={styles.confettiDot} style={{ left: '58%', top: '40%' }} />
-          <div className={styles.confettiDot} style={{ left: '78%', top: '28%' }} />
-        </div>
+    <div style={S.page}>
+      {/* confetti */}
+      {confettiCount != null && <ConfettiBurst count={confettiCount} />}
+
+      {/* banners */}
+      <style>{`
+        @keyframes fadeOutUp {
+          0% { opacity: 1; transform: translate(-50%, 0); }
+          70% { opacity: .98; transform: translate(-50%, -6px); }
+          100% { opacity: 0; transform: translate(-50%, -14px); }
+        }
+      `}</style>
+      {banner && (
+        <div style={S.banner}>{banner}</div>
       )}
 
-      {/* Toast */}
-      {!splitMode && toast && (
-        <div className={styles.toastWrap} aria-live="polite" aria-atomic="true">
-          <div className={styles.toastBubble}>{toast.text}</div>
+      {/* header */}
+      <header style={S.header}>
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <span style={S.brand}>Pick Dashboard</span>
+          <span style={S.badge}>Picklist #{picklistId}</span>
+          {creator && <span style={S.badgeMuted}>Door {creator}</span>}
         </div>
-      )}
-
-      {/* Topbar */}
-      <header className={styles.topbar}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-          <div style={{ display: 'flex', alignItems: 'center' }}>
-            <nav className={styles.nav}>
-              <a className={styles.navBtn}>Home</a>
-              <a className={styles.navBtn} onClick={() => setXl(x => !x)}>Station 1</a>
-              <button onClick={() => setDebug(d => !d)} className={styles.debugBtn}>Debug {debug ? '🔛' : '🔘'}</button>
-            </nav>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5em' }}>
-            <div className={styles.status}>
-              <div className={styles.statusRow}>
-                <span>Picklist: <strong>#{picklistId || '—'}</strong></span>
-                {primaryCreatedBy && (
-                  <span className={styles.creatorTopbar}>
-                    <span className={styles.creatorDot} aria-hidden="true">{getInitials(primaryCreatedBy)}</span>
-                    <span className={styles.creatorLabel}>Door</span>
-                    <strong className={styles.creatorName}>{primaryCreatedBy}</strong>
-                  </span>
-                )}
-                {!splitMode && (
-                  <>
-                    <span>Voortgang: <strong>{progress}%</strong></span>
-                    <span>Totaal: <strong>{(Array.isArray(dataItems) ? dataItems.reduce((s, it) => s + totalOf(it), 0) : total)}</strong></span>
-                    <span>Nog te doen: <strong>{(Array.isArray(dataItems) ? dataItems.reduce((s, it) => s + Math.max(0, totalOf(it) - pickedOf(it)), 0) : Math.max(0, total - done))}</strong></span>
-                  </>
-                )}
-                <span className={styles.clock}>{now}</span>
-              </div>
-              {!splitMode && (
-                <div className={(styles as any).headerProgress}>
-                  <i style={{ width: `${progress}%` }} />
-                </div>
-              )}
-            </div>
-            <button
-              onClick={() => signOut({ callbackUrl: '/login' })}
-              className={styles.navBtn}
-              style={{ background: '#222', color: '#ffd166', borderRadius: 8, padding: '6px 16px', border: '1px solid #ffd166', fontWeight: 600, cursor: 'pointer' }}
-            >
-              Uitloggen
-            </button>
-          </div>
+        <div style={{ display: 'flex', gap: 18, alignItems: 'center' }}>
+          <span style={S.meta}>Voortgang: <b>{progress}%</b></span>
+          <span style={S.meta}>Totaal: <b>{total}</b></span>
+          <span style={S.meta}>Nog te doen: <b>{todo}</b></span>
+          <span style={S.clock}>{now}</span>
         </div>
       </header>
 
-      {/* Main */}
-      <main className={styles.main}>
-        {splitMode ? (
-          <div className={styles.splitWrap}>
-            <section className={styles.splitPaneTop}>
-              <RenderBatchMini b={batches[0]} fx={{}} />
-            </section>
-            <section className={styles.splitPaneBottom}>
-              <RenderBatchMini b={batches[1]} fx={{}} />
-            </section>
-          </div>
-        ) : currentProduct ? (
-          <div className={styles.singleWrap}>
-            <div className={styles.card}>
-              {/* HERO locatie */}
-              {(() => {
-                const loc = String(currentProduct?.stocklocation ?? currentProduct?.stock_location ?? '—');
-                const segs = loc.split(/[.\s-]+/).filter(Boolean);
-                return (
-                  <div className={`${styles.heroSingle} ${singleFx.locPulse ? styles.heroSinglePulse : ''}`} style={{ ['--zone' as any]: zoneColor(loc) }} aria-label={`Locatie ${loc}`}>
-                    <span className={styles.zoneBadgeLg}>{zoneOf(loc) || '–'}</span>
-                    <div className={styles.heroSegs}>
-                      {segs.length ? segs.map((s, i) => <span key={s + i} className={styles.heroSeg}>{s}</span>) : <span className={styles.heroSeg}>—</span>}
-                    </div>
-                  </div>
-                );
-              })()}
+      <div style={S.progressWrapHeader}><div style={{ ...S.progressFillHeader, width: `${progress}%` }} /></div>
 
-              {/* FOTO + PROGRESS-RING */}
-              <div className={styles.heroImageWrap} style={{
-                ['--zone' as any]: zoneColor(currentProduct?.stocklocation ?? currentProduct?.stock_location),
-                ['--prog' as any]: total > 0 ? Math.max(0, Math.min(100, (done / total) * 100)) : 0,
-              }}>
-                <ProductImage item={currentProduct} max={260} radius={16} alt={currentProduct?.product || currentProduct?.name || 'Productfoto'} />
-              </div>
-
-              {/* NAAM + SKU */}
-              <div className={styles.meta}>
-                <div className={styles.productName}>{currentProduct?.product || currentProduct?.name || ''}</div>
-                <div className={styles.sku}>SKU: <span style={{ fontFamily: 'ui-monospace' }}>{sku}</span></div>
-              </div>
-
-              {/* STATS */}
-              <div className={styles.statsWide}>
-                <div className={`${styles.statCard} ${singleFx.bump ? styles.statFlash : ''}`} style={{ ['--zone' as any]: zoneColor(currentProduct?.stocklocation ?? currentProduct?.stock_location) }}>
-                  <div className={styles.statCardValue}>{done}</div>
-                  <div className={styles.statCardLabel}>Gedaan</div>
-                </div>
-                <div className={styles.statCardMuted}>
-                  <div className={styles.statCardValue}>{total}</div>
-                  <div className={styles.statCardLabel}>Totaal</div>
-                </div>
-              </div>
-
-              {/* VOLGENDE LOCATIES */}
-              {nextLocations?.length > 0 && (
-                <div className={styles.nextSection}>
-                  <div className={styles.nextTitle}>Volgende locaties:</div>
-                  <div className={styles.nextGrid}>
-                    {nextLocations.map((L, i) => (
-                      <div key={L + i} className={styles.badgeBig} style={{ ['--zone' as any]: zoneColor(L) }}>{L}</div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        ) : showEmpty ? (
-          <div style={{ textAlign: 'center', marginTop: 64, color: '#888', fontSize: '1.5rem', fontWeight: 500 }}>
+      <main style={S.main}>
+        {phase === 'EMPTY' ? (
+          <div style={S.empty}>
             Geen actieve batch of pickdata gevonden.
-            <br />
-            <span style={{ fontSize: '1rem', color: '#aaa' }}>Wacht op een nieuwe batch…</span>
+            <div style={{ color: '#999', fontSize: 18, marginTop: 6 }}>Wacht op een nieuwe batch…</div>
           </div>
         ) : (
-          <div /> /* korte tussenfase */
+          <div style={S.rows}>
+            {top3.map((it, i) => <BigRow key={(it?.productcode ?? it?.sku ?? 'slot') + ':' + i} it={it} />)}
+          </div>
         )}
       </main>
     </div>
   );
 }
+
+/* ===== styles ===== */
+const S: Record<string, React.CSSProperties> = {
+  page: { minHeight: '100vh', background: '#fff', color: '#0f172a', fontFamily: 'Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif' },
+
+  header: { position: 'sticky', top: 0, zIndex: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '18px 28px', background: '#fff', borderBottom: '1px solid #eee' },
+  brand: { fontWeight: 800, fontSize: 24 },
+  badge: { background: '#1f6feb', color: '#fff', borderRadius: 999, padding: '7px 12px', fontSize: 14, fontWeight: 800 },
+  badgeMuted: { background: '#eef2ff', color: '#334155', borderRadius: 999, padding: '7px 12px', fontSize: 14, fontWeight: 800 },
+  meta: { fontSize: 16, color: '#334155' },
+  clock: { fontVariantNumeric: 'tabular-nums', color: '#475569', fontSize: 16 },
+
+  progressWrapHeader: { height: 8, background: '#f3f4f6', overflow: 'hidden' },
+  progressFillHeader: { height: '100%', background: '#10b981', transition: 'width .22s ease' },
+
+  main: { width: '100%', padding: '22px 24px 28px', minHeight: 'calc(100vh - 110px)' },
+
+  rows: { display: 'grid', gridTemplateRows: 'repeat(3, minmax(0, 1fr))', gap: 18, height: 'calc(100vh - 160px)' },
+
+  row: {
+    display: 'grid',
+    gridTemplateColumns: '260px 1fr 1px min(30vw, 380px)',
+    alignItems: 'center',
+    columnGap: 36,
+    padding: 28,
+    border: '1px solid #e5e7eb',
+    background: '#fff',
+    borderRadius: 26,
+    boxShadow: '0 10px 30px rgba(2, 6, 23, 0.06)',
+  },
+
+  left: { display: 'flex', alignItems: 'center', justifyContent: 'center' },
+
+  mid: { minWidth: 0 },
+  locWrap: { display: 'flex', alignItems: 'center', gap: 18, marginBottom: 10, flexWrap: 'wrap' },
+  zoneMega: { padding: '10px 16px', borderRadius: 999, fontWeight: 900, fontSize: 26, color: '#0f172a', boxShadow: 'inset 0 0 0 1px rgba(15,23,42,.08)' },
+  locMegaLine: { display: 'flex', alignItems: 'center', gap: 16, fontSize: 56, fontWeight: 900, letterSpacing: .5, color: '#0f172a', flexWrap: 'wrap' },
+  locMegaSeg: { display: 'inline-flex', alignItems: 'center' },
+  locMegaDot: { margin: '0 12px', color: '#cbd5e1', fontSize: 44 },
+
+  title: { fontWeight: 800, fontSize: 26, color: '#111827', marginTop: 4, marginBottom: 6, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+
+  skuLine: { display: 'flex', alignItems: 'center', gap: 12, marginTop: 2 },
+  skuLabel: { fontSize: 13, color: '#6b7280', padding: '3px 9px', background: '#f3f4f6', borderRadius: 8, fontWeight: 800, letterSpacing: .2 },
+  skuVal: { fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace', fontSize: 18, fontWeight: 800 },
+
+  vDivider: { width: 1, height: '70%', background: '#eef2f7', justifySelf: 'stretch' },
+
+  right: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, paddingRight: 18, justifySelf: 'end' },
+
+  counterCard: { background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 16, padding: '12px 18px', minWidth: 200, textAlign: 'center', boxShadow: 'inset 0 -1px 0 rgba(0,0,0,0.03)' },
+  counterTop: { display: 'flex', alignItems: 'baseline', gap: 10, justifyContent: 'center' },
+  counterDone: { fontSize: 56, fontWeight: 900, color: '#111827' },
+  counterSlash: { color: '#9ca3af', fontSize: 28, fontWeight: 800 },
+  counterTot: { fontSize: 42, fontWeight: 900, color: '#334155' },
+  counterLbl: { marginTop: 4, fontSize: 11, fontWeight: 800, letterSpacing: 0.6, color: '#64748b' },
+
+  progressOuter: { width: 'min(30vw, 380px)', height: 12, background: '#eef2f7', borderRadius: 10, overflow: 'hidden', border: '1px solid #e5e7eb', alignSelf: 'center', marginRight: 12 },
+  progressFillGreen: { height: '100%', background: '#10b981', transition: 'width .18s ease' },
+
+  empty: { display: 'grid', placeItems: 'center', height: 'calc(100vh - 160px)', textAlign: 'center', color: '#6b7280', fontSize: 24 },
+
+  skelImg: { width: 200, height: 200, borderRadius: 18, background: '#f3f4f6', border: '1px solid #eee' },
+  skelTitleBig: { width: '70%', height: 56, borderRadius: 10, background: '#f3f4f6', marginBottom: 12 },
+  skelLine: { width: '45%', height: 22, borderRadius: 8, background: '#f3f4f6', marginBottom: 8 },
+  skelLineShort: { width: '28%', height: 20, borderRadius: 8, background: '#f3f4f6' },
+
+  banner: {
+    position: 'fixed', top: 70, left: '50%', transform: 'translateX(-50%)',
+    background: '#0f172a', color: '#fff', padding: '10px 18px', borderRadius: 999,
+    zIndex: 30, fontWeight: 900, boxShadow: '0 10px 24px rgba(0,0,0,.25)',
+    animation: `fadeOutUp ${NEW_BANNER_MS}ms forwards`,
+    pointerEvents: 'none'
+  },
+};
