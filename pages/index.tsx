@@ -6,10 +6,9 @@ import { zoneColor, zoneOf } from '../lib/picqer';
 /* ===================== TUNABLES ===================== */
 const POLL_MS = 220;             // hoofd polling interval
 const FETCH_TIMEOUT_MS = 900;    // timeout per request
-const NO_ID_STREAK_MAX = 2;      // X opeenvolgende polls zonder ID → leeg tonen
-const ALL_DONE_STREAK_MAX = 2;   // X opeenvolgende polls all-done → leeg tonen
-const CONFETTI_MS = 900;         // confetti duur
-const TOAST_MS = 1200;           // toast duur
+const CONFETTI_MS = 1000;        // confetti duur (ms)
+const TOAST_MS = 1200;           // toast duur (ms)
+const NO_ID_STREAK_MAX = 2;      // pas leeg tonen na X polls zonder batchIds (anti-flikker)
 
 /* ===================== TYPES & UTILS ===================== */
 type BatchView = {
@@ -26,7 +25,6 @@ type BatchView = {
   todoProducts: number;
   createdBy?: string | null;
 };
-
 type MiniFxMap = Record<string, { locPulse?: boolean; bump?: boolean; __loc?: string; __done?: number }>;
 
 const collator = new Intl.Collator('nl', { numeric: true, sensitivity: 'base' });
@@ -41,10 +39,9 @@ function getInitials(name?: string | null) {
 function signOut({ callbackUrl }: { callbackUrl: string }) {
   window.location.href = callbackUrl;
 }
-
 async function fetchJson(url: string, timeoutMs: number, signal?: AbortSignal) {
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort('timeout'), timeoutMs);
+  const t = setTimeout(() => ctrl.abort('timeout'), timeoutMs);
   try {
     const res = await fetch(url, {
       cache: 'no-store',
@@ -60,7 +57,7 @@ async function fetchJson(url: string, timeoutMs: number, signal?: AbortSignal) {
     if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
     return text ? JSON.parse(text) : null;
   } finally {
-    clearTimeout(timer);
+    clearTimeout(t);
   }
 }
 
@@ -85,7 +82,6 @@ function RenderBatchMini({ b, fx }: { b: BatchView; fx?: { locPulse?: boolean; b
   return (
     <div className={styles.panel}>
       <div className={styles.panelCard}>
-        {/* HERO locatiebalk */}
         <div className={`${styles.heroLoc} ${fx?.locPulse ? styles.heroLocPulse : ''}`} style={{ ['--zone' as any]: zoneColor(loc) }} aria-label={`Locatie ${loc}`}>
           <span className={styles.zoneBadge}>{zoneOf(loc) || '–'}</span>
           <div className={styles.locSegWrap}>
@@ -93,7 +89,6 @@ function RenderBatchMini({ b, fx }: { b: BatchView; fx?: { locPulse?: boolean; b
           </div>
         </div>
 
-        {/* Header */}
         <div className={styles.miniHeader}>
           <div className={styles.miniMetaLeft}>
             <span className={styles.batchId}>Batch #{String(b.batchId)}</span>
@@ -111,7 +106,6 @@ function RenderBatchMini({ b, fx }: { b: BatchView; fx?: { locPulse?: boolean; b
           <div className={styles.miniProgress}><i style={{ width: `${Math.max(0, Math.min(100, b.progress || 0))}%` }} /></div>
         </div>
 
-        {/* Grid */}
         <div className={styles.panelGrid}>
           <div className={styles.colLeft}>
             <div className={styles.imageWellSm} style={{ ['--zone' as any]: zoneColor(loc) }}>
@@ -119,7 +113,6 @@ function RenderBatchMini({ b, fx }: { b: BatchView; fx?: { locPulse?: boolean; b
             </div>
             <div className={styles.skuBadge}>SKU: <b>{b.sku || '—'}</b></div>
           </div>
-
           <div className={styles.colCenter}>
             <div className={styles.productNameSplit}>{b.product || '—'}</div>
             {typeof b.totalProducts === 'number' && typeof b.todoProducts === 'number' && (
@@ -130,7 +123,6 @@ function RenderBatchMini({ b, fx }: { b: BatchView; fx?: { locPulse?: boolean; b
               </div>
             )}
           </div>
-
           <div className={styles.colRight}>
             <div className={`${styles.countPill} ${fx?.bump ? styles.pillFlashSm : ''}`}>
               <div className={styles.countValue}>{b.done}</div>
@@ -192,17 +184,16 @@ export default function HomePage() {
     toastTimerRef.current = setTimeout(() => setToast(null), ms);
   };
 
-  // fase (empty/active)
-  type Phase = 'ACTIVE' | 'EMPTY';
+  // fase-machine
+  type Phase = 'ACTIVE' | 'COMPLETED' | 'EMPTY';
   const [phase, setPhase] = useState<Phase>('EMPTY');
 
   // guards & refs
   const prevLocRef = useRef('');
   const prevDoneRef = useRef<number>(-1);
   const prevSkusRef = useRef<string[]>([]);
-  const completionArmedRef = useRef(false);     // active picks aanwezig → armeren
+  const completionArmedRef = useRef(false); // set true wanneer we actieve picks hebben
   const noIdStreakRef = useRef(0);
-  const allDoneStreakRef = useRef(0);
 
   // loop controls
   const loopTimerRef = useRef<any>(null);
@@ -247,7 +238,7 @@ export default function HomePage() {
     const loop = async () => {
       if (unmounted) return;
 
-      // cancel huidig request
+      // abort lopende fetch
       if (inFlightRef.current) { inFlightRef.current.abort(); inFlightRef.current = null; }
       const aborter = new AbortController();
       inFlightRef.current = aborter;
@@ -259,12 +250,11 @@ export default function HomePage() {
         const j = await fetchJson(`/api/next-batch?${bust}`, FETCH_TIMEOUT_MS, aborter.signal);
         const ids: (string | number)[] = Array.isArray(j?.batchIds) ? j.batchIds : (j?.batchId ? [j.batchId] : []);
 
-        // Geen IDs → verhoog streak en toon pas leeg na NO_ID_STREAK_MAX
         if (!ids || ids.length === 0) {
+          // geen ids → tel korte streak tegen flikker
           noIdStreakRef.current += 1;
-          allDoneStreakRef.current = 0;
           if (noIdStreakRef.current >= NO_ID_STREAK_MAX) {
-            completionArmedRef.current = false; // niets te completen
+            completionArmedRef.current = false;
             if (toastTimerRef.current) { clearTimeout(toastTimerRef.current); setToast(null); }
             setBatchCompleteFx(false);
             switchToEmptyUI();
@@ -288,7 +278,7 @@ export default function HomePage() {
             }
           }
 
-          // Views bouwen
+          // 3) Views bouwen
           const views: BatchView[] = [];
           for (let i = 0; i < picks.length; i++) {
             const p = picks[i] as any;
@@ -335,20 +325,21 @@ export default function HomePage() {
             });
           }
 
-          // Signalering op basis van todo in plaats van cur (robuust tegen kortstondige cur=null)
           const todoSum = views.reduce((s, v) => s + Math.max(0, v.todoProducts || 0), 0);
           const hasViews = views.length > 0;
           const hasActive = hasViews && todoSum > 0;
           const allDoneNow = hasViews && todoSum === 0;
 
+          /* ======= STATE MACHINE ======= */
           if (hasActive) {
-            // ACTIEF → reset all-done streak, arm completion, wis lingering UI
-            allDoneStreakRef.current = 0;
-            completionArmedRef.current = true;
-
-            if (toastTimerRef.current) { clearTimeout(toastTimerRef.current); setToast(null); }
-            setBatchCompleteFx(false);
-            setPhase('ACTIVE');
+            // ACTIVE
+            if (phase !== 'ACTIVE') {
+              setPhase('ACTIVE');
+              completionArmedRef.current = true;           // vanaf hier mag completion weer triggeren
+              // stop eventueel lingering UI
+              if (toastTimerRef.current) { clearTimeout(toastTimerRef.current); setToast(null); }
+              setBatchCompleteFx(false);
+            }
 
             // kies primary
             const active = views.filter(v => v.todoProducts > 0 && v.currentProduct);
@@ -361,13 +352,11 @@ export default function HomePage() {
             // animaties
             const loc = String(primary.currentProduct?.stocklocation ?? primary.currentProduct?.stock_location ?? '');
             const doneVal = primary.done;
-
             if (prevLocRef.current && prevLocRef.current !== loc) {
               setSingleFx(s => ({ ...s, locPulse: true }));
               setTimeout(() => setSingleFx(s => ({ ...s, locPulse: false })), 360);
             }
             prevLocRef.current = loc;
-
             if (prevDoneRef.current >= 0 && doneVal > prevDoneRef.current) {
               setSingleFx(s => ({ ...s, bump: true }));
               setTimeout(() => setSingleFx(s => ({ ...s, bump: false })), 520);
@@ -382,7 +371,7 @@ export default function HomePage() {
             prevSkusRef.current = currentSkus;
 
             // miniFx + batches
-            setBatches(active.length ? active : views); // val terug op views als cur tijdelijk null is
+            setBatches(active.length ? active : views);
             setMiniFx(prev => {
               const list = active.length ? active : views;
               const next: MiniFxMap = { ...prev };
@@ -414,30 +403,26 @@ export default function HomePage() {
             setNextLocations(primary.nextLocations);
             setPrimaryCreatedBy(primary.createdBy ?? null);
 
-            // optionele confetti bij 100% voortgang (visueel, maar geen fase-wissel)
-            if (typeof primary.progress === 'number' && primary.progress === 100 && !batchCompleteFx) {
-              setBatchCompleteFx(true);
-              setTimeout(() => setBatchCompleteFx(false), CONFETTI_MS);
-            }
           } else if (allDoneNow) {
-            // ALL DONE → tel streak; bij drempel: confetti+toast, direct naar empty
-            allDoneStreakRef.current += 1;
-            if (allDoneStreakRef.current >= ALL_DONE_STREAK_MAX) {
-              if (completionArmedRef.current) {
-                completionArmedRef.current = false; // disarm tot er weer picks zijn
-                setBatchCompleteFx(true);
-                showToast('Batch voltooid', TOAST_MS);
-                setTimeout(() => setBatchCompleteFx(false), CONFETTI_MS);
-              }
-              switchToEmptyUI();
+            // DIRECT naar COMPLETED als we ge-armed waren
+            if (completionArmedRef.current && phase !== 'COMPLETED') {
+              completionArmedRef.current = false; // disarm, éénmalig
+              setPhase('COMPLETED');
+              setBatchCompleteFx(true);
+              showToast('Batch voltooid', TOAST_MS);
+
+              // meteen doorzetten naar EMPTY na confetti
+              setTimeout(() => {
+                setBatchCompleteFx(false);
+                switchToEmptyUI();
+              }, CONFETTI_MS);
             }
           } else {
-            // Views maar geen active en niet all-done (zeldzaam/glitch): laat huidige UI staan
-            allDoneStreakRef.current = 0;
+            // Geen views → laat huidige UI staan; ID-streak regelt lege staat
           }
         }
       } catch {
-        // fouten/timeouts: UI blijft staan; geen phase flip
+        // fout/timeout → UI laten zoals hij is
       } finally {
         loopTimerRef.current = setTimeout(loop, POLL_MS);
       }
@@ -450,7 +435,7 @@ export default function HomePage() {
       if (inFlightRef.current) inFlightRef.current.abort();
       if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     };
-  }, [phase, toast, batchCompleteFx]);
+  }, [phase]);
 
   const showEmpty = phase === 'EMPTY' && !splitMode && !currentProduct;
 
@@ -596,7 +581,7 @@ export default function HomePage() {
             <span style={{ fontSize: '1rem', color: '#aaa' }}>Wacht op een nieuwe batch…</span>
           </div>
         ) : (
-          <div /> /* tussenfase */
+          <div /> /* korte tussenfase */
         )}
       </main>
     </div>
