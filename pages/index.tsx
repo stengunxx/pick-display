@@ -1,3 +1,4 @@
+// pages/index.tsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { zoneColor, zoneOf } from '../lib/picqer';
 
@@ -5,12 +6,12 @@ import { zoneColor, zoneOf } from '../lib/picqer';
 const BASE_POLL_MS = 220;
 const BURST_POLL_MS = 80;
 const BURST_WINDOW_MS = 2000;
-const TIMEOUT_MS = 900;
+const TIMEOUT_MS = 2600;           // ruimer dan server call
 const EMPTY_GRACE_MS = 400;
-const STICKY_KEEP_MS = 5000;      // houd laatst bekende batchId nog even vast
+const STICKY_KEEP_MS = 5000;
 const NEW_BANNER_MS = 1600;
-const PICKLIST_CONFETTI_MS = 900; // mini
-const BATCH_CONFETTI_MS = 1400;   // groot
+const PICKLIST_CONFETTI_MS = 900;
+const BATCH_CONFETTI_MS = 1400;
 
 /* ===== utils ===== */
 const collator = new Intl.Collator('nl', { numeric: true, sensitivity: 'base' });
@@ -62,7 +63,6 @@ function BigRow({ it }: { it: any }) {
   const segs = loc.split(/[.\s-]+/).filter(Boolean);
   const tot  = totalOf(it);
   const done = pickedOf(it);
-
   return (
     <div style={S.row}>
       <div style={S.left}><ProductImage item={it} size={200} /></div>
@@ -88,17 +88,18 @@ function BigRow({ it }: { it: any }) {
           <div style={S.counterTop}>
             <span style={S.counterDone}>{done}</span>
             <span style={S.counterSlash}>/</span>
-            <span style={S.counterTot}>{tot}</span>
+            <span style={S.counterTot}>{totalOf(it)}</span>
           </div>
           <div style={S.counterLbl}>GEPIKT / TOTAAL</div>
         </div>
         <div style={S.progressOuter}>
-          <div style={{ ...S.progressFillGreen, width: `${tot > 0 ? Math.min(100, (done / tot) * 100) : 0}%` }} />
+          <div style={{ ...S.progressFillGreen, width: `${totalOf(it) > 0 ? Math.min(100, (done / totalOf(it)) * 100) : 0}%` }} />
         </div>
       </div>
     </div>
   );
 }
+
 function RowSkeleton() {
   return (
     <div style={S.row}>
@@ -117,7 +118,6 @@ function RowSkeleton() {
   );
 }
 
-/* duidelijke confetti (mini of groot via prop) */
 function ConfettiBurst({ count = 120 }: { count?: number }) {
   const pieces = Array.from({ length: count }).map((_, i) => {
     const left = Math.random() * 100;
@@ -168,17 +168,14 @@ export default function IndexPage() {
   const [items, setItems] = useState<any[]>([]);
   const [phase, setPhase] = useState<'ACTIVE' | 'COMPLETED' | 'EMPTY'>('EMPTY');
 
-  // FX
   const [confettiCount, setConfettiCount] = useState<number | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
 
-  // timers/refs
   const loopRef = useRef<any>(null);
   const inflightRef = useRef<AbortController | null>(null);
   const burstUntilRef = useRef(0);
   const lastGoodItemsRef = useRef<{ ts: number; items: any[] } | null>(null);
 
-  // batch/picklist tracking
   const prevBatchIdRef = useRef<string>('');
   const stickyBatchRef = useRef<{ id: string; ts: number } | null>(null);
   const prevPicklistIdRef = useRef<string>('');
@@ -187,16 +184,20 @@ export default function IndexPage() {
   const idAbsentSinceRef = useRef<number>(0);
   const armedBatchConfettiRef = useRef(false);
 
-  // batches die we heel even bewust negeren (zojuist als "done" gezien)
+  // batches die we kort negeren (na "done"), MAAR NIET als we EMPTY zijn
   const ignoreBatchRef = useRef<{ id: string; until: number } | null>(null);
+
+  // fase als ref
+  const phaseRef = useRef<typeof phase>(phase);
+  useEffect(() => { phaseRef.current = phase; }, [phase]);
+
+  // markeer wanneer de huidige picklijst feitelijk leeg is
+  const zeroSinceRef = useRef<number | 0>(0);
 
   /* clock */
   const [now, setNow] = useState('');
   useEffect(() => {
-    const t = setInterval(() => {
-      const d = new Date();
-      setNow(d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
-    }, 1000);
+    const t = setInterval(() => setNow(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })), 1000);
     return () => clearInterval(t);
   }, []);
 
@@ -206,32 +207,15 @@ export default function IndexPage() {
     return three.concat(Array(Math.max(0, 3 - three.length)).fill(null));
   }, [openItems]);
 
-  /* header totals */
   const total = items.reduce((s, it) => s + totalOf(it), 0);
   const done  = items.reduce((s, it) => s + pickedOf(it), 0);
   const todo  = Math.max(0, total - done);
   const progress = total > 0 ? Math.round((done / total) * 100) : 0;
 
-  const showBanner = (text: string, ms = NEW_BANNER_MS) => {
-    setBanner(text);
-    setTimeout(() => setBanner(null), ms);
-  };
-  const burst = (ms = BURST_WINDOW_MS) => {
-    burstUntilRef.current = Math.max(burstUntilRef.current, performance.now() + ms);
-  };
-  const firePicklistCompleted = () => {
-    setConfettiCount(90); // mini
-    showBanner('Picklijst voltooid', NEW_BANNER_MS);
-    setTimeout(() => setConfettiCount(null), PICKLIST_CONFETTI_MS);
-    burst(1600);
-  };
-  const fireBatchCompleted = () => {
-    setConfettiCount(170); // groot
-    showBanner('Batch voltooid', NEW_BANNER_MS);
-    setTimeout(() => setConfettiCount(null), BATCH_CONFETTI_MS);
-    setPhase('COMPLETED');
-    burst(2000);
-  };
+  const showBanner = (text: string, ms = NEW_BANNER_MS) => { setBanner(text); setTimeout(() => setBanner(null), ms); };
+  const burst = (ms = BURST_WINDOW_MS) => { burstUntilRef.current = Math.max(burstUntilRef.current, performance.now() + ms); };
+  const firePicklistCompleted = () => { setConfettiCount(90); showBanner('Picklijst voltooid', NEW_BANNER_MS); setTimeout(() => setConfettiCount(null), PICKLIST_CONFETTI_MS); burst(1600); };
+  const fireBatchCompleted = () => { setConfettiCount(170); showBanner('Batch voltooid', NEW_BANNER_MS); setTimeout(() => setConfettiCount(null), BATCH_CONFETTI_MS); setPhase('COMPLETED'); burst(2000); };
 
   const switchToEmpty = () => {
     setPhase('EMPTY');
@@ -240,6 +224,7 @@ export default function IndexPage() {
     setCreator(null);
     prevPicklistIdRef.current = '';
     prevPickTodoRef.current = -1;
+    zeroSinceRef.current = 0;
   };
 
   /* polling loop */
@@ -255,12 +240,25 @@ export default function IndexPage() {
 
     const currentBatchIdOrSticky = (ids: (string | number)[] | null | undefined) => {
       const now = Date.now();
-      const ignore = ignoreBatchRef.current && now < ignoreBatchRef.current.until ? ignoreBatchRef.current.id : null;
+      const ignoreActive = ignoreBatchRef.current && now < ignoreBatchRef.current.until;
+      const ignoreId = ignoreActive ? ignoreBatchRef.current!.id : null;
+
+      // Als we EMPTY zijn, NIET negeren → meteen pakken wat er is
+      if (phaseRef.current === 'EMPTY') {
+        if (ids && ids.length > 0) {
+          const id = String(ids[0]);
+          stickyBatchRef.current = { id, ts: now };
+          return id;
+        }
+        if (stickyBatchRef.current && (now - stickyBatchRef.current.ts) < STICKY_KEEP_MS) {
+          return stickyBatchRef.current.id;
+        }
+        return null;
+      }
 
       if (ids && ids.length > 0) {
         const first = String(ids[0]);
-        if (ignore && first === ignore) {
-          // probeer volgende, anders niets kiezen
+        if (ignoreId && first === ignoreId) {
           const next = ids.length > 1 ? String(ids[1]) : null;
           if (next) {
             stickyBatchRef.current = { id: next, ts: now };
@@ -271,11 +269,9 @@ export default function IndexPage() {
         stickyBatchRef.current = { id: first, ts: now };
         return first;
       }
-      // geen ids? gebruik sticky zolang niet verlopen en niet genegeerd
+
       if (stickyBatchRef.current && (now - stickyBatchRef.current.ts) < STICKY_KEEP_MS) {
-        if (!ignore || stickyBatchRef.current.id !== ignore) {
-          return stickyBatchRef.current.id;
-        }
+        if (!ignoreId || stickyBatchRef.current.id !== ignoreId) return stickyBatchRef.current.id;
       }
       return null;
     };
@@ -299,7 +295,6 @@ export default function IndexPage() {
         if (!chosen) {
           if (!idAbsentSinceRef.current) idAbsentSinceRef.current = Date.now();
 
-          // enkel NA de grace → batch voltooid + EMPTY
           if (Date.now() - idAbsentSinceRef.current >= EMPTY_GRACE_MS) {
             if (armedBatchConfettiRef.current) {
               fireBatchCompleted();
@@ -314,10 +309,10 @@ export default function IndexPage() {
         // Nieuwe batch?
         if (!prevBatchIdRef.current || prevBatchIdRef.current !== chosen) {
           prevBatchIdRef.current = chosen;
-          armedBatchConfettiRef.current = true; // batch-confetti pas vuren als hij echt klaar is
-          // reset picklist state bij batchwissel
+          armedBatchConfettiRef.current = true; // gewapend voor confetti
           prevPicklistIdRef.current = '';
           prevPickTodoRef.current   = -1;
+          zeroSinceRef.current = 0;
           burst();
         }
 
@@ -331,14 +326,27 @@ export default function IndexPage() {
         // haal items (en picklist-debug) op
         const p = await fetchJson(`/api/next-pick?batchId=${chosen}&${bustQ}`, TIMEOUT_MS, aborter.signal);
 
+        // === Pending-bridge: als picklijst net leeg was en we zien even pending, behandel als done
+        if (p && p.pending === true) {
+          if (zeroSinceRef.current && Date.now() - zeroSinceRef.current > 1200) {
+            if (armedBatchConfettiRef.current) {
+              fireBatchCompleted();
+              armedBatchConfettiRef.current = false;
+            }
+            ignoreBatchRef.current = { id: String(chosen), until: Date.now() + 2000 };
+            stickyBatchRef.current = null;
+            idAbsentSinceRef.current = Date.now();
+            switchToEmpty();
+          }
+          return schedule();
+        }
+
         if (p && p.done === true) {
-          // backend zegt: hele batch is klaar
           if (armedBatchConfettiRef.current) {
             fireBatchCompleted();
             armedBatchConfettiRef.current = false;
           }
-          // voorkom dat we nog even tegen dezelfde batch blijven aankijken
-          ignoreBatchRef.current = { id: String(chosen), until: Date.now() + 6000 };
+          ignoreBatchRef.current = { id: String(chosen), until: Date.now() + 2000 };
           stickyBatchRef.current = null;
           idAbsentSinceRef.current = Date.now();
           switchToEmpty();
@@ -350,8 +358,8 @@ export default function IndexPage() {
           ? p.items.slice().sort((a: any, b: any) => collator.compare(locOf(a), locOf(b)))
           : [];
 
-        // SWR tegen flikkers
-        if ((!arr || arr.length === 0) && lastGoodItemsRef.current && (Date.now() - lastGoodItemsRef.current.ts) < 1200) {
+        // SWR: houd UI stabiel tot 5s bij korte hikjes
+        if ((!arr || arr.length === 0) && lastGoodItemsRef.current && (Date.now() - lastGoodItemsRef.current.ts) < 5000) {
           arr = lastGoodItemsRef.current.items;
         } else if (arr && arr.length > 0) {
           lastGoodItemsRef.current = { ts: Date.now(), items: arr };
@@ -360,25 +368,29 @@ export default function IndexPage() {
         const debugPickId = String(p?.debug?.picklistId ?? '');
         const todoNow = arr.reduce((s, it) => s + remOf(it), 0);
 
-        // ===== PICKLIJST-SPECIFIEK: detecteer einde
+        // Houd bij wanneer picklijst leeg werd
+        if (todoNow === 0 && arr.length > 0) {
+          if (!zeroSinceRef.current) zeroSinceRef.current = Date.now();
+        } else {
+          zeroSinceRef.current = 0;
+        }
+
+        // ===== PICKLIJST-SPECIFIEK
         if (debugPickId) {
-          // nieuwe picklijst verschenen (id switch)?
           if (prevPicklistIdRef.current && prevPicklistIdRef.current !== debugPickId) {
             showBanner('Nieuwe picklijst', NEW_BANNER_MS);
             setConfettiCount(60);
             setTimeout(() => setConfettiCount(null), PICKLIST_CONFETTI_MS);
             burst();
             prevPickTodoRef.current = -1;
+            zeroSinceRef.current = 0;
           }
-
-          // todo voortgang binnen *deze* picklijst
           if (prevPicklistIdRef.current === debugPickId || !prevPicklistIdRef.current) {
             if (prevPickTodoRef.current !== -1 && prevPickTodoRef.current > 0 && todoNow === 0) {
               firePicklistCompleted();
             }
             prevPickTodoRef.current = todoNow;
           }
-
           prevPicklistIdRef.current = debugPickId;
         }
 
@@ -408,38 +420,23 @@ export default function IndexPage() {
 
   return (
     <div style={S.page}>
-      {/* confetti */}
       {confettiCount != null && <ConfettiBurst count={confettiCount} />}
-
-      {/* banners */}
-      <style>{`
-        @keyframes fadeOutUp {
-          0% { opacity: 1; transform: translate(-50%, 0); }
-          70% { opacity: .98; transform: translate(-50%, -6px); }
-          100% { opacity: 0; transform: translate(-50%, -14px); }
-        }
-      `}</style>
-      {banner && (
-        <div style={S.banner}>{banner}</div>
-      )}
-
-      {/* header */}
+      <style>{`@keyframes fadeOutUp{0%{opacity:1;transform:translate(-50%,0)}70%{opacity:.98;transform:translate(-50%,-6px)}100%{opacity:0;transform:translate(-50%,-14px)}}`}</style>
+      {banner && (<div style={S.banner}>{banner}</div>)}
       <header style={S.header}>
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+        <div style={{ display:'flex', gap:12, alignItems:'center' }}>
           <span style={S.brand}>Pick Dashboard</span>
           <span style={S.badge}>Picklist #{picklistId}</span>
           {creator && <span style={S.badgeMuted}>Door {creator}</span>}
         </div>
-        <div style={{ display: 'flex', gap: 18, alignItems: 'center' }}>
+        <div style={{ display:'flex', gap:18, alignItems:'center' }}>
           <span style={S.meta}>Voortgang: <b>{progress}%</b></span>
           <span style={S.meta}>Totaal: <b>{total}</b></span>
           <span style={S.meta}>Nog te doen: <b>{todo}</b></span>
           <span style={S.clock}>{now}</span>
         </div>
       </header>
-
       <div style={S.progressWrapHeader}><div style={{ ...S.progressFillHeader, width: `${progress}%` }} /></div>
-
       <main style={S.main}>
         {phase === 'EMPTY' ? (
           <div style={S.empty}>

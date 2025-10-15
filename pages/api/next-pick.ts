@@ -1,4 +1,4 @@
-
+// pages/api/next-pick.ts
 import { getProductImageUrlByCode } from "../../lib/picqer";
 import type { NextApiRequest, NextApiResponse } from "next";
 import { getServerSession } from "next-auth/next";
@@ -31,7 +31,9 @@ async function fetchWithTimeout(resource: string, options: any = {}, timeout = 1
 
 const amtTotal  = (it: any) => Number(it?.amount ?? it?.amount_to_pick ?? 0);
 const amtPicked = (it: any) => Number(it?.amountpicked ?? it?.amount_picked ?? 0);
-const hasWork   = (it: any) => !it?.picked && amtPicked(it) < amtTotal(it);
+
+// ❗ Belangrijke fix: maak "heeft werk" puur kwantitatief; negeer de `picked`-flag
+const hasWork   = (it: any) => amtPicked(it) < amtTotal(it);
 
 // Statusen die NIET echt klaar zijn
 const OPEN_STATUSES = new Set(["open","new","processing","inprogress","active","started"]);
@@ -65,15 +67,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     } catch {
       // timeout / netwerk → val terug op laatst-goed, nooit "done"
       const cached = cacheGet(batchId);
-      if (cached) return res.json({ ...cached, error: "timeout" });
-      return res.json({ pending: true }); // frontend blijft actief poll’en
+      if (cached) return res.status(200).json({ ...cached, error: "timeout" });
+      return res.status(200).json({ pending: true }); // frontend blijft actief poll’en
     }
 
     const picklists = Array.isArray(picklistsResp?.picklists) ? picklistsResp.picklists : [];
     const candidates = picklists.filter((p: any) => OPEN_STATUSES.has(String(p?.status || "").toLowerCase()));
 
     // Geen open picklists → echt klaar
-    if (!candidates.length) return res.json({ done: true });
+    if (!candidates.length) return res.status(200).json({ done: true });
 
     // 2) loop alle open picklists, kies de EERSTE met werk
     let sawItems = false;
@@ -112,6 +114,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         } catch { return it; }
       }));
 
+      // Zoek het eerstvolgende item met werk (op basis van hoeveelheden)
       const nextItem = enriched.find(hasWork);
       if (nextItem) {
         const nextLocations = enriched
@@ -127,23 +130,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           nextLocations,
         };
         cacheSet(batchId, payload);    // alleen non-done cachen
-        return res.json(payload);
+        return res.status(200).json(payload);
       }
       // geen werk in deze picklist → door naar de volgende
     }
 
     // We zagen items, maar geen werk in alle open picklists → batch klaar
-    if (sawItems) return res.json({ done: true });
+    if (sawItems) return res.status(200).json({ done: true });
 
     // We kregen niets bruikbaars (bv. rate limit): val terug
     const cached = cacheGet(batchId);
-    if (cached) return res.json({ ...cached, error: "fallback-cache" });
+    if (cached) return res.status(200).json({ ...cached, error: "fallback-cache" });
 
     // Laat UI weten dat het tijdelijk pending is
-    return res.json({ pending: true });
+    return res.status(200).json({ pending: true });
   } catch (e) {
     const cached = cacheGet(String(req.query.batchId || ""));
-    if (cached) return res.json({ ...cached, error: "server-error" });
+    if (cached) return res.status(200).json({ ...cached, error: "server-error" });
     return res.status(500).json({ error: "Interne serverfout", details: String(e) });
   }
 }
