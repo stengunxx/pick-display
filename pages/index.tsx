@@ -194,6 +194,9 @@ export default function IndexPage() {
   // markeer wanneer de huidige picklijst feitelijk leeg is
   const zeroSinceRef = useRef<number | 0>(0);
 
+  // NIEUW: hoe lang “0 open” stabiel is op lastGood-items
+  const zeroStableSinceRef = useRef<number | 0>(0);
+
   /* clock */
   const [now, setNow] = useState('');
   useEffect(() => {
@@ -225,6 +228,9 @@ export default function IndexPage() {
     prevPicklistIdRef.current = '';
     prevPickTodoRef.current = -1;
     zeroSinceRef.current = 0;
+    zeroStableSinceRef.current = 0;
+    // 🆕 reset ignore direct → unvoltooien pakt meteen weer op
+    ignoreBatchRef.current = null;
   };
 
   /* polling loop */
@@ -313,6 +319,7 @@ export default function IndexPage() {
           prevPicklistIdRef.current = '';
           prevPickTodoRef.current   = -1;
           zeroSinceRef.current = 0;
+          zeroStableSinceRef.current = 0;
           burst();
         }
 
@@ -326,17 +333,19 @@ export default function IndexPage() {
         // haal items (en picklist-debug) op
         const p = await fetchJson(`/api/next-pick?batchId=${chosen}&${bustQ}`, TIMEOUT_MS, aborter.signal);
 
-        // === Pending-bridge: als picklijst net leeg was en we zien even pending, behandel als done
+        // === Pending-bridge: als picklijst net 0 was en we zien pending/rare gaps → behandel als done
         if (p && p.pending === true) {
-          if (zeroSinceRef.current && Date.now() - zeroSinceRef.current > 1200) {
+          // als we eerder 0 open items zagen én dat is al even stabiel → done
+          if (zeroStableSinceRef.current && (Date.now() - zeroStableSinceRef.current > 900)) {
             if (armedBatchConfettiRef.current) {
               fireBatchCompleted();
               armedBatchConfettiRef.current = false;
             }
-            ignoreBatchRef.current = { id: String(chosen), until: Date.now() + 2000 };
+            ignoreBatchRef.current = { id: String(chosen), until: Date.now() + 600 }; // kort zodat unvoltooien snel werkt
             stickyBatchRef.current = null;
             idAbsentSinceRef.current = Date.now();
             switchToEmpty();
+            return schedule();
           }
           return schedule();
         }
@@ -346,7 +355,7 @@ export default function IndexPage() {
             fireBatchCompleted();
             armedBatchConfettiRef.current = false;
           }
-          ignoreBatchRef.current = { id: String(chosen), until: Date.now() + 2000 };
+          ignoreBatchRef.current = { id: String(chosen), until: Date.now() + 600 }; // ⬅ verkort
           stickyBatchRef.current = null;
           idAbsentSinceRef.current = Date.now();
           switchToEmpty();
@@ -368,11 +377,20 @@ export default function IndexPage() {
         const debugPickId = String(p?.debug?.picklistId ?? '');
         const todoNow = arr.reduce((s, it) => s + remOf(it), 0);
 
-        // Houd bij wanneer picklijst leeg werd
+        // Houd bij wanneer picklijst leeg werd (op actuele arr)
         if (todoNow === 0 && arr.length > 0) {
           if (!zeroSinceRef.current) zeroSinceRef.current = Date.now();
         } else {
           zeroSinceRef.current = 0;
+        }
+
+        // 🆕: ook kijken naar laatst-goede items om ‘stabiel 0’ te meten
+        const lastGood = lastGoodItemsRef.current?.items ?? [];
+        const lastGoodTodo = lastGood.reduce((s, it) => s + Math.max(0, totalOf(it) - pickedOf(it)), 0);
+        if (lastGood.length > 0 && lastGoodTodo === 0) {
+          if (!zeroStableSinceRef.current) zeroStableSinceRef.current = Date.now();
+        } else {
+          zeroStableSinceRef.current = 0;
         }
 
         // ===== PICKLIJST-SPECIFIEK
@@ -384,6 +402,7 @@ export default function IndexPage() {
             burst();
             prevPickTodoRef.current = -1;
             zeroSinceRef.current = 0;
+            zeroStableSinceRef.current = 0;
           }
           if (prevPicklistIdRef.current === debugPickId || !prevPicklistIdRef.current) {
             if (prevPickTodoRef.current !== -1 && prevPickTodoRef.current > 0 && todoNow === 0) {
