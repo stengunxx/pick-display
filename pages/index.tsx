@@ -1,4 +1,3 @@
-// pages/index.tsx
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { zoneColor, zoneOf } from '../lib/picqer';
 
@@ -188,6 +187,9 @@ export default function IndexPage() {
   const idAbsentSinceRef = useRef<number>(0);
   const armedBatchConfettiRef = useRef(false);
 
+  // batches die we heel even bewust negeren (zojuist als "done" gezien)
+  const ignoreBatchRef = useRef<{ id: string; until: number } | null>(null);
+
   /* clock */
   const [now, setNow] = useState('');
   useEffect(() => {
@@ -236,6 +238,8 @@ export default function IndexPage() {
     setItems([]);
     setPicklistId('—');
     setCreator(null);
+    prevPicklistIdRef.current = '';
+    prevPickTodoRef.current = -1;
   };
 
   /* polling loop */
@@ -250,14 +254,28 @@ export default function IndexPage() {
     };
 
     const currentBatchIdOrSticky = (ids: (string | number)[] | null | undefined) => {
+      const now = Date.now();
+      const ignore = ignoreBatchRef.current && now < ignoreBatchRef.current.until ? ignoreBatchRef.current.id : null;
+
       if (ids && ids.length > 0) {
-        const id = String(ids[0]);
-        stickyBatchRef.current = { id, ts: Date.now() };
-        return id;
+        const first = String(ids[0]);
+        if (ignore && first === ignore) {
+          // probeer volgende, anders niets kiezen
+          const next = ids.length > 1 ? String(ids[1]) : null;
+          if (next) {
+            stickyBatchRef.current = { id: next, ts: now };
+            return next;
+          }
+          return null;
+        }
+        stickyBatchRef.current = { id: first, ts: now };
+        return first;
       }
-      // geen ids? gebruik sticky zolang niet verlopen
-      if (stickyBatchRef.current && Date.now() - stickyBatchRef.current.ts < STICKY_KEEP_MS) {
-        return stickyBatchRef.current.id;
+      // geen ids? gebruik sticky zolang niet verlopen en niet genegeerd
+      if (stickyBatchRef.current && (now - stickyBatchRef.current.ts) < STICKY_KEEP_MS) {
+        if (!ignore || stickyBatchRef.current.id !== ignore) {
+          return stickyBatchRef.current.id;
+        }
       }
       return null;
     };
@@ -280,12 +298,15 @@ export default function IndexPage() {
 
         if (!chosen) {
           if (!idAbsentSinceRef.current) idAbsentSinceRef.current = Date.now();
-          // als we net klaar waren en er is echt niets → batch confetti vuren (als gewapend)
-          if (armedBatchConfettiRef.current) {
-            fireBatchCompleted();
-            armedBatchConfettiRef.current = false;
+
+          // enkel NA de grace → batch voltooid + EMPTY
+          if (Date.now() - idAbsentSinceRef.current >= EMPTY_GRACE_MS) {
+            if (armedBatchConfettiRef.current) {
+              fireBatchCompleted();
+              armedBatchConfettiRef.current = false;
+            }
+            switchToEmpty();
           }
-          if (Date.now() - idAbsentSinceRef.current >= EMPTY_GRACE_MS) switchToEmpty();
           return schedule();
         }
         idAbsentSinceRef.current = 0;
@@ -293,8 +314,10 @@ export default function IndexPage() {
         // Nieuwe batch?
         if (!prevBatchIdRef.current || prevBatchIdRef.current !== chosen) {
           prevBatchIdRef.current = chosen;
-          armedBatchConfettiRef.current = true; // na deze batch mag batch-confetti
-          // “Nieuwe batch” is optioneel; belangrijker is “Nieuwe picklijst” beneden
+          armedBatchConfettiRef.current = true; // batch-confetti pas vuren als hij echt klaar is
+          // reset picklist state bij batchwissel
+          prevPicklistIdRef.current = '';
+          prevPickTodoRef.current   = -1;
           burst();
         }
 
@@ -314,7 +337,11 @@ export default function IndexPage() {
             fireBatchCompleted();
             armedBatchConfettiRef.current = false;
           }
-          // we blijven even turbo zoeken naar volgende batch
+          // voorkom dat we nog even tegen dezelfde batch blijven aankijken
+          ignoreBatchRef.current = { id: String(chosen), until: Date.now() + 6000 };
+          stickyBatchRef.current = null;
+          idAbsentSinceRef.current = Date.now();
+          switchToEmpty();
           return schedule();
         }
 
@@ -335,29 +362,24 @@ export default function IndexPage() {
 
         // ===== PICKLIJST-SPECIFIEK: detecteer einde
         if (debugPickId) {
-            // nieuwe picklijst verschenen (id switch)?
-            if (prevPicklistIdRef.current && prevPicklistIdRef.current !== debugPickId) {
-              // net geswitcht → toon “Nieuwe picklijst”
-              showBanner('Nieuwe picklijst', NEW_BANNER_MS);
-              setConfettiCount(60); // klein burstje
-              setTimeout(() => setConfettiCount(null), PICKLIST_CONFETTI_MS);
-              burst();
-              // reset todo-tracker voor nieuwe picklijst
-              prevPickTodoRef.current = -1;
-            }
+          // nieuwe picklijst verschenen (id switch)?
+          if (prevPicklistIdRef.current && prevPicklistIdRef.current !== debugPickId) {
+            showBanner('Nieuwe picklijst', NEW_BANNER_MS);
+            setConfettiCount(60);
+            setTimeout(() => setConfettiCount(null), PICKLIST_CONFETTI_MS);
+            burst();
+            prevPickTodoRef.current = -1;
+          }
 
-            // todo voortgang binnen *deze* picklijst
-            if (prevPicklistIdRef.current === debugPickId || !prevPicklistIdRef.current) {
-              if (prevPickTodoRef.current !== -1 && prevPickTodoRef.current > 0 && todoNow === 0) {
-                // deze picklijst is nu klaar -> mini confetti
-                firePicklistCompleted();
-                // we verwachten dat backend snel de volgende picklijst serveert → blijf in ACTIVE
-              }
-              prevPickTodoRef.current = todoNow;
+          // todo voortgang binnen *deze* picklijst
+          if (prevPicklistIdRef.current === debugPickId || !prevPicklistIdRef.current) {
+            if (prevPickTodoRef.current !== -1 && prevPickTodoRef.current > 0 && todoNow === 0) {
+              firePicklistCompleted();
             }
+            prevPickTodoRef.current = todoNow;
+          }
 
-            // onthoud actuele picklistId
-            prevPicklistIdRef.current = debugPickId;
+          prevPicklistIdRef.current = debugPickId;
         }
 
         // ===== UI set
@@ -366,21 +388,11 @@ export default function IndexPage() {
         setItems(arr);
         if (arr.length > 0 && phase !== 'ACTIVE') setPhase('ACTIVE');
 
-        // ===== Batch klaar “arming” / undo
-        if (todoNow === 0) {
-          // alles van huidige picklijst klaar; batch kan nog doorlopen → wacht op done:true of picklist switch
-          // maar “armed” blijft aan tot we werkelijk geen ids meer hebben of backend done:true terugstuurt
-        } else {
-          // er is werk → als we eerder batch-complete confetti gewapend hadden en jij drukte op (–),
-          // dan blijven we gewoon ACTIVE (niet naar EMPTY).
-          if (phase === 'COMPLETED') setPhase('ACTIVE');
-        }
-
         // burst bij meetbare verandering
         if (prevPickTodoRef.current !== -1 && prevPickTodoRef.current !== todoNow) burst();
 
       } catch {
-        // negeren
+        // negeer individuele poll fouten
       } finally {
         schedule();
       }

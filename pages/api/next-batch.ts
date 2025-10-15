@@ -16,7 +16,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (!session) return res.status(401).json({ error: "Unauthorized" });
 
   const baseRaw = process.env.PICQER_API_URL ?? '';
-  const base = baseRaw.replace(/\/+$/, ''); // strip trailing slash
+  const base = baseRaw.replace(/\/+$/, '');
   const key  = process.env.PICQER_API_KEY ?? '';
 
   if (!base || !key) {
@@ -35,21 +35,21 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     'Content-Type': 'application/json',
   };
 
-  const attempts = [];
+  const attempts:any[] = [];
 
   try {
-    // 1) Outbound check — faalt dit, dan is je runtime/netwerk stuk
+    // 1) Outbound check
     try {
       const ping = await withTimeout(fetch('https://httpbin.org/get'), 4000, 'httpbin');
       attempts.push({ step: 'httpbin', status: (ping as Response).status });
     } catch (e) {
-      // Outbound faalt: geef een geldige lege batch terug zodat frontend niet blokkeert
-      return res.json({ batchId: null, error: 'Outbound netwerk faalt', attempts });
+      // geef "lege" batch terug zodat frontend netjes naar EMPTY kan
+      return res.status(200).json({ batchId: null, batchIds: [], batches: [], error: 'Outbound netwerk faalt', attempts });
     }
 
-    // 2) Probeer beide bekende endpoints
+    // 2) Probeer endpoint(s)
     const candidates = [base + '/picklists/batches'];
-    let batches = null;
+    let batches: any[] | null = null;
 
     for (let i = 0; i < candidates.length; i++) {
       const url = candidates[i];
@@ -57,53 +57,46 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const r = await withTimeout(fetch(url, { headers }), 8000, 'GET ' + url) as Response;
         const txt = await r.text();
         if (!r.ok) {
-          attempts.push({ url: url, status: r.status, body: txt.slice(0, 300) });
+          attempts.push({ url, status: r.status, body: txt.slice(0,300) });
           continue;
         }
         let json: any;
-        try { json = JSON.parse(txt); }
-        catch (e) {
-          attempts.push({ url: url, status: r.status, parseError: String(e), body: txt.slice(0, 300) });
+        try { json = JSON.parse(txt); } catch (e) {
+          attempts.push({ url, status: r.status, parseError: String(e), body: txt.slice(0,300) });
           continue;
         }
-        if (Array.isArray(json)) {
-          batches = json;
-          attempts.push({ url: url, status: r.status, ok: true, length: json.length, shape: 'array' });
-          break;
-        }
-        if (json && Array.isArray(json.data)) {
-          batches = json.data;
-          attempts.push({ url: url, status: r.status, ok: true, length: json.data.length, shape: 'data[]' });
-          break;
-        }
-        attempts.push({ url: url, status: r.status, note: 'unexpected shape', keys: Object.keys(json || {}) });
+        if (Array.isArray(json))       { batches = json; break; }
+        if (json && Array.isArray(json.data)) { batches = json.data; break; }
+        attempts.push({ url, note: 'unexpected shape', keys: Object.keys(json || {}) });
       } catch (e) {
-        attempts.push({ url: url, error: String(e) });
+        attempts.push({ url, error: String(e) });
       }
     }
 
     if (!batches) {
-      console.log('attempts:', attempts);
       return res.status(200).json({
         step: 'error',
         batchId: null,
         batchIds: [],
         batches: [],
         error: 'Kon geen lijst met batches ophalen van Picqer',
-        attempts: attempts,
-        hint: 'Controleer of jouw tenant picklist-batches of pickbatches gebruikt en of de API key toegang heeft.',
+        attempts,
       });
     }
 
-  const open = (batches as any[]).filter((b: any) => OPEN_STATUSES.indexOf(String(b && b.status || '').toLowerCase()) !== -1);
+    const open = (batches as any[]).filter((b: any) =>
+      OPEN_STATUSES.indexOf(String((b && b.status) || '').toLowerCase()) !== -1
+    );
 
+    // BELANGRIJK: Altijd 200 teruggeven (geen 404), met lege lijst
     if (open.length === 0) {
-      return res.status(404).json({
+      return res.status(200).json({
         step: 'filter-open',
+        batchId: null,
+        batchIds: [],
+        batches: [],
         error: 'Geen open pickbatch bij Picqer',
-        attempts: attempts,
-        sample: (batches as any[]).slice(0, 3),
-        hint: 'Check welke statuswaarden jouw tenant gebruikt; voeg ze eventueel toe aan OPEN_STATUSES.',
+        attempts,
       });
     }
 
@@ -140,7 +133,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         batches: [],
         error: 'Geen geldige batch IDs',
         first: open[0],
-        debug: { chosen_statuses: [], attempts: attempts },
+        debug: { chosen_statuses: [], attempts },
       });
     }
 
@@ -149,14 +142,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       batchId: batchMeta[0].batchId,
       batchIds: batchMeta.map(b => b.batchId),
       batches: batchMeta,
-      debug: { chosen_statuses: batchMeta.map(b => b.status), attempts: attempts },
+      debug: { chosen_statuses: batchMeta.map(b => b.status), attempts },
     });
   } catch (err) {
     console.error('next-batch fatal:', err);
-    return res.status(500).json({
+    return res.status(200).json({
       step: 'fatal',
+      batchId: null,
+      batchIds: [],
+      batches: [],
       error: (err && (err as any).message) || String(err),
-      attempts: attempts,
+      attempts,
     });
   }
 }
