@@ -54,21 +54,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const attempts: any[] = [];
 
   try {
-    // 1) Outbound sanity check (niet kritisch)
-    try {
-      const ping = (await withTimeout(fetch("https://httpbin.org/get"), 4000, "httpbin")) as Response;
-      attempts.push({ step: "httpbin", status: ping.status });
-    } catch (e) {
-      attempts.push({ step: "httpbin", error: String(e) });
-      // Niet hard falen—ga gewoon door, we geven onderin 200 terug
-    }
-
-    // 2) Haal batches op (altijd 200 teruggeven)
+    // 1) Haal batches op (altijd 200 teruggeven)
     const url = base + "/picklists/batches";
     let batches: any[] | null = null;
 
     try {
-      const r = (await withTimeout(fetch(url, { headers }), 8000, "GET " + url)) as Response;
+      const r = (await withTimeout(fetch(url, { headers }), 1200, "GET " + url)) as Response;
       const txt = await r.text();
       let json: any = null;
       try {

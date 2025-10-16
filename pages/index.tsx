@@ -163,6 +163,7 @@ function ConfettiBurst({ count = 120 }: { count?: number }) {
 
 /* ===== page ===== */
 export default function IndexPage() {
+  /* ---------- STATE & REFS (altijd eerst) ---------- */
   const [picklistId, setPicklistId] = useState<string>('—');
   const [creator, setCreator] = useState<string | null>(null);
   const [items, setItems] = useState<any[]>([]);
@@ -184,42 +185,39 @@ export default function IndexPage() {
   const idAbsentSinceRef = useRef<number>(0);
   const armedBatchConfettiRef = useRef(false);
 
-  // batches die we kort negeren (na "done"), MAAR NIET als we EMPTY zijn
   const ignoreBatchRef = useRef<{ id: string; until: number } | null>(null);
 
-  // fase als ref
   const phaseRef = useRef<typeof phase>(phase);
   useEffect(() => { phaseRef.current = phase; }, [phase]);
 
-  // markeer wanneer de huidige picklijst feitelijk leeg is
   const zeroSinceRef = useRef<number | 0>(0);
-
-  // NIEUW: hoe lang “0 open” stabiel is op lastGood-items
   const zeroStableSinceRef = useRef<number | 0>(0);
 
-  /* clock */
+  const lastActiveTsRef = useRef<number>(Date.now());
+
+  // klok
   const [now, setNow] = useState('');
   useEffect(() => {
     const t = setInterval(() => setNow(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })), 1000);
     return () => clearInterval(t);
   }, []);
 
+  // afgeleiden
   const openItems = useMemo(() => items.filter(it => remOf(it) > 0), [items]);
   const top3 = useMemo(() => {
     const three = openItems.slice(0, 3);
     return three.concat(Array(Math.max(0, 3 - three.length)).fill(null));
   }, [openItems]);
-
   const total = items.reduce((s, it) => s + totalOf(it), 0);
   const done  = items.reduce((s, it) => s + pickedOf(it), 0);
   const todo  = Math.max(0, total - done);
   const progress = total > 0 ? Math.round((done / total) * 100) : 0;
 
+  /* ---------- HELPERS (mogen state/refs gebruiken) ---------- */
   const showBanner = (text: string, ms = NEW_BANNER_MS) => { setBanner(text); setTimeout(() => setBanner(null), ms); };
   const burst = (ms = BURST_WINDOW_MS) => { burstUntilRef.current = Math.max(burstUntilRef.current, performance.now() + ms); };
   const firePicklistCompleted = () => { setConfettiCount(90); showBanner('Picklijst voltooid', NEW_BANNER_MS); setTimeout(() => setConfettiCount(null), PICKLIST_CONFETTI_MS); burst(1600); };
   const fireBatchCompleted = () => { setConfettiCount(170); showBanner('Batch voltooid', NEW_BANNER_MS); setTimeout(() => setConfettiCount(null), BATCH_CONFETTI_MS); setPhase('COMPLETED'); burst(2000); };
-
   const switchToEmpty = () => {
     setPhase('EMPTY');
     setItems([]);
@@ -229,11 +227,40 @@ export default function IndexPage() {
     prevPickTodoRef.current = -1;
     zeroSinceRef.current = 0;
     zeroStableSinceRef.current = 0;
-    // 🆕 reset ignore direct → unvoltooien pakt meteen weer op
     ignoreBatchRef.current = null;
   };
 
-  /* polling loop */
+  /* ---------- WATCHDOG: revive als EMPTY maar sticky bestaat ---------- */
+  useEffect(() => {
+    const t = setInterval(async () => {
+      if (items.length > 0 && phaseRef.current !== 'EMPTY') lastActiveTsRef.current = Date.now();
+      const idleMs = Date.now() - lastActiveTsRef.current;
+      if (phaseRef.current === 'EMPTY' && stickyBatchRef.current?.id && idleMs > 2000) {
+        try {
+          const aborter = new AbortController();
+          const bustQ = `_=${Date.now()}&w=rescue`;
+          const chosen = stickyBatchRef.current.id;
+          const p = await fetchJson(`/api/next-pick?batchId=${chosen}&${bustQ}`, 1800, aborter.signal);
+          if (p?.items?.length) {
+            setPicklistId(String(chosen));
+            setItems(p.items);
+            if (phaseRef.current === 'EMPTY') setPhase('ACTIVE');
+            lastActiveTsRef.current = Date.now();
+          }
+        } catch {}
+      }
+    }, 1000);
+    return () => clearInterval(t);
+  }, [items.length]); // minimale dependency
+
+  /* ---------- Wake Lock (best effort) ---------- */
+  useEffect(() => {
+    let lock: any;
+    (async () => { try { lock = await (navigator as any).wakeLock?.request?.('screen'); } catch {} })();
+    return () => { try { lock?.release?.(); } catch {} };
+  }, []);
+
+  /* ---------- Polling loop ---------- */
   useEffect(() => {
     let unmounted = false;
 
@@ -249,16 +276,13 @@ export default function IndexPage() {
       const ignoreActive = ignoreBatchRef.current && now < ignoreBatchRef.current.until;
       const ignoreId = ignoreActive ? ignoreBatchRef.current!.id : null;
 
-      // Als we EMPTY zijn, NIET negeren → meteen pakken wat er is
       if (phaseRef.current === 'EMPTY') {
         if (ids && ids.length > 0) {
           const id = String(ids[0]);
           stickyBatchRef.current = { id, ts: now };
           return id;
         }
-        if (stickyBatchRef.current && (now - stickyBatchRef.current.ts) < STICKY_KEEP_MS) {
-          return stickyBatchRef.current.id;
-        }
+        if (stickyBatchRef.current && (now - stickyBatchRef.current.ts) < STICKY_KEEP_MS) return stickyBatchRef.current.id;
         return null;
       }
 
@@ -266,10 +290,7 @@ export default function IndexPage() {
         const first = String(ids[0]);
         if (ignoreId && first === ignoreId) {
           const next = ids.length > 1 ? String(ids[1]) : null;
-          if (next) {
-            stickyBatchRef.current = { id: next, ts: now };
-            return next;
-          }
+          if (next) { stickyBatchRef.current = { id: next, ts: now }; return next; }
           return null;
         }
         stickyBatchRef.current = { id: first, ts: now };
@@ -300,12 +321,8 @@ export default function IndexPage() {
 
         if (!chosen) {
           if (!idAbsentSinceRef.current) idAbsentSinceRef.current = Date.now();
-
           if (Date.now() - idAbsentSinceRef.current >= EMPTY_GRACE_MS) {
-            if (armedBatchConfettiRef.current) {
-              fireBatchCompleted();
-              armedBatchConfettiRef.current = false;
-            }
+            if (armedBatchConfettiRef.current) { fireBatchCompleted(); armedBatchConfettiRef.current = false; }
             switchToEmpty();
           }
           return schedule();
@@ -315,7 +332,7 @@ export default function IndexPage() {
         // Nieuwe batch?
         if (!prevBatchIdRef.current || prevBatchIdRef.current !== chosen) {
           prevBatchIdRef.current = chosen;
-          armedBatchConfettiRef.current = true; // gewapend voor confetti
+          armedBatchConfettiRef.current = true;
           prevPicklistIdRef.current = '';
           prevPickTodoRef.current   = -1;
           zeroSinceRef.current = 0;
@@ -323,25 +340,20 @@ export default function IndexPage() {
           burst();
         }
 
-        // creator label (optioneel)
+        // creator (best effort)
         let createdBy: string | null = null;
         if (Array.isArray(nb?.batches)) {
           const meta = nb.batches.find((b: any) => String(b?.batchId ?? '') === chosen);
           createdBy = meta?.createdBy ?? null;
         }
 
-        // haal items (en picklist-debug) op
+        // items
         const p = await fetchJson(`/api/next-pick?batchId=${chosen}&${bustQ}`, TIMEOUT_MS, aborter.signal);
 
-        // === Pending-bridge: als picklijst net 0 was en we zien pending/rare gaps → behandel als done
         if (p && p.pending === true) {
-          // als we eerder 0 open items zagen én dat is al even stabiel → done
           if (zeroStableSinceRef.current && (Date.now() - zeroStableSinceRef.current > 900)) {
-            if (armedBatchConfettiRef.current) {
-              fireBatchCompleted();
-              armedBatchConfettiRef.current = false;
-            }
-            ignoreBatchRef.current = { id: String(chosen), until: Date.now() + 600 }; // kort zodat unvoltooien snel werkt
+            if (armedBatchConfettiRef.current) { fireBatchCompleted(); armedBatchConfettiRef.current = false; }
+            ignoreBatchRef.current = { id: String(chosen), until: Date.now() + 600 };
             stickyBatchRef.current = null;
             idAbsentSinceRef.current = Date.now();
             switchToEmpty();
@@ -351,23 +363,18 @@ export default function IndexPage() {
         }
 
         if (p && p.done === true) {
-          if (armedBatchConfettiRef.current) {
-            fireBatchCompleted();
-            armedBatchConfettiRef.current = false;
-          }
-          ignoreBatchRef.current = { id: String(chosen), until: Date.now() + 600 }; // ⬅ verkort
+          if (armedBatchConfettiRef.current) { fireBatchCompleted(); armedBatchConfettiRef.current = false; }
+          ignoreBatchRef.current = { id: String(chosen), until: Date.now() + 600 };
           stickyBatchRef.current = null;
           idAbsentSinceRef.current = Date.now();
           switchToEmpty();
           return schedule();
         }
 
-        // normaliseer items
         let arr: any[] = Array.isArray(p?.items)
           ? p.items.slice().sort((a: any, b: any) => collator.compare(locOf(a), locOf(b)))
           : [];
 
-        // SWR: houd UI stabiel tot 5s bij korte hikjes
         if ((!arr || arr.length === 0) && lastGoodItemsRef.current && (Date.now() - lastGoodItemsRef.current.ts) < 5000) {
           arr = lastGoodItemsRef.current.items;
         } else if (arr && arr.length > 0) {
@@ -377,14 +384,12 @@ export default function IndexPage() {
         const debugPickId = String(p?.debug?.picklistId ?? '');
         const todoNow = arr.reduce((s, it) => s + remOf(it), 0);
 
-        // Houd bij wanneer picklijst leeg werd (op actuele arr)
         if (todoNow === 0 && arr.length > 0) {
           if (!zeroSinceRef.current) zeroSinceRef.current = Date.now();
         } else {
           zeroSinceRef.current = 0;
         }
 
-        // 🆕: ook kijken naar laatst-goede items om ‘stabiel 0’ te meten
         const lastGood = lastGoodItemsRef.current?.items ?? [];
         const lastGoodTodo = lastGood.reduce((s, it) => s + Math.max(0, totalOf(it) - pickedOf(it)), 0);
         if (lastGood.length > 0 && lastGoodTodo === 0) {
@@ -393,7 +398,6 @@ export default function IndexPage() {
           zeroStableSinceRef.current = 0;
         }
 
-        // ===== PICKLIJST-SPECIFIEK
         if (debugPickId) {
           if (prevPicklistIdRef.current && prevPicklistIdRef.current !== debugPickId) {
             showBanner('Nieuwe picklijst', NEW_BANNER_MS);
@@ -413,13 +417,11 @@ export default function IndexPage() {
           prevPicklistIdRef.current = debugPickId;
         }
 
-        // ===== UI set
         setPicklistId(chosen);
         setCreator(createdBy);
         setItems(arr);
-        if (arr.length > 0 && phase !== 'ACTIVE') setPhase('ACTIVE');
+        if (arr.length > 0 && phaseRef.current !== 'ACTIVE') setPhase('ACTIVE');
 
-        // burst bij meetbare verandering
         if (prevPickTodoRef.current !== -1 && prevPickTodoRef.current !== todoNow) burst();
 
       } catch {

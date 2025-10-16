@@ -21,7 +21,7 @@ const cacheSet = (bid: string, data: any) => {
 
 async function fetchWithTimeout(resource: string, options: any = {}, timeout = 1500): Promise<Response> {
   const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeout);   // gebruik het meegegeven timeout!
+  const id = setTimeout(() => controller.abort(), 1200);   // snellere timeout
   try {
     return await fetch(resource, { ...options, signal: controller.signal });
   } finally {
