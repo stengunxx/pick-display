@@ -164,6 +164,7 @@ function ConfettiBurst({ count = 120 }: { count?: number }) {
 
 /* ===== page ===== */
 export default function IndexPage() {
+  const lastProbeRef = useRef<number>(0); // throttle voor probe op genegeerde batch
   /* ---------- STATE & REFS (altijd eerst) ---------- */
   const [picklistId, setPicklistId] = useState<string>('—');
   const [creator, setCreator] = useState<string | null>(null);
@@ -322,6 +323,36 @@ export default function IndexPage() {
         const ids: (string | number)[] = Array.isArray(nb?.batchIds)
           ? nb.batchIds
           : (nb?.batchId ? [nb.batchId] : []);
+
+        // --- PROBE: check snel of de genegeerde batch weer werk heeft ---
+        {
+          const nowTs = Date.now();
+          const ignoreActive = !!(ignoreBatchRef.current && nowTs < ignoreBatchRef.current.until);
+          const ignoredId = ignoreActive ? String(ignoreBatchRef.current!.id) : null;
+
+          // alleen als de genegeerde batch in de lijst staat én we niet te vaak proben
+          if (
+            ignoredId &&
+            Array.isArray(ids) &&
+            ids.map(String).includes(ignoredId) &&
+            nowTs - lastProbeRef.current > 900 // max ~1x per seconde
+          ) {
+            lastProbeRef.current = nowTs;
+            try {
+              const bustQ = `_=${nowTs}&probe=1`;
+              const probe = await fetchJson(`/api/next-pick?batchId=${ignoredId}&${bustQ}`, 1200, aborter.signal);
+              const arr: any[] = Array.isArray(probe?.items) ? probe.items : [];
+              const todoProbe = arr.reduce((s, it) => s + Math.max(0, (Number(it?.amount ?? it?.amount_to_pick ?? 0) - Number(it?.amountpicked ?? it?.amount_picked ?? 0))), 0);
+
+              if (todoProbe > 0) {
+                // direct unignore + voorkeur geven aan die batch
+                ignoreBatchRef.current = null;
+                stickyBatchRef.current = { id: ignoredId, ts: Date.now() };
+              }
+            } catch { /* probe is best-effort */ }
+          }
+        }
+        // --- EINDE PROBE ---
 
         const chosen = currentBatchIdOrSticky(ids);
 
