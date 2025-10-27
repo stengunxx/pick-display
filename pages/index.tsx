@@ -12,6 +12,7 @@ const STICKY_KEEP_MS = 5000;
 const NEW_BANNER_MS = 1600;
 const PICKLIST_CONFETTI_MS = 900;
 const BATCH_CONFETTI_MS = 1400;
+const IGNORE_AFTER_DONE_MS = 60_000; // 60s i.p.v. 600ms
 
 /* ===== utils ===== */
 const collator = new Intl.Collator('nl', { numeric: true, sensitivity: 'base' });
@@ -227,7 +228,7 @@ export default function IndexPage() {
     prevPickTodoRef.current = -1;
     zeroSinceRef.current = 0;
     zeroStableSinceRef.current = 0;
-    ignoreBatchRef.current = null;
+    // BELANGRIJK: ignoreBatchRef.current NIET leeghalen!
   };
 
   /* ---------- WATCHDOG: revive als EMPTY maar sticky bestaat ---------- */
@@ -273,30 +274,35 @@ export default function IndexPage() {
 
     const currentBatchIdOrSticky = (ids: (string | number)[] | null | undefined) => {
       const now = Date.now();
-      const ignoreActive = ignoreBatchRef.current && now < ignoreBatchRef.current.until;
+      const ignoreActive = !!(ignoreBatchRef.current && now < ignoreBatchRef.current.until);
       const ignoreId = ignoreActive ? ignoreBatchRef.current!.id : null;
 
+      // Als we EMPTY zijn, probeer sticky of kies eerste bruikbare id
       if (phaseRef.current === 'EMPTY') {
         if (ids && ids.length > 0) {
-          const id = String(ids[0]);
-          stickyBatchRef.current = { id, ts: now };
-          return id;
+          const pick = ids.map(String).find(id => !ignoreId || id !== ignoreId) || null;
+          if (pick) {
+            stickyBatchRef.current = { id: pick, ts: now };
+            return pick;
+          }
         }
-        if (stickyBatchRef.current && (now - stickyBatchRef.current.ts) < STICKY_KEEP_MS) return stickyBatchRef.current.id;
+        // Sticky nog even vasthouden (grace)
+        if (stickyBatchRef.current && (now - stickyBatchRef.current.ts) < STICKY_KEEP_MS) {
+          if (!ignoreId || stickyBatchRef.current.id !== ignoreId) return stickyBatchRef.current.id;
+        }
         return null;
       }
 
+      // ACTIVE: kies de eerste niet-genegeerde id en update sticky
       if (ids && ids.length > 0) {
-        const first = String(ids[0]);
-        if (ignoreId && first === ignoreId) {
-          const next = ids.length > 1 ? String(ids[1]) : null;
-          if (next) { stickyBatchRef.current = { id: next, ts: now }; return next; }
-          return null;
+        const pick = ids.map(String).find(id => !ignoreId || id !== ignoreId) || null;
+        if (pick) {
+          stickyBatchRef.current = { id: pick, ts: now };
+          return pick;
         }
-        stickyBatchRef.current = { id: first, ts: now };
-        return first;
       }
 
+      // fallback op sticky zolang hij niet genegeerd is
       if (stickyBatchRef.current && (now - stickyBatchRef.current.ts) < STICKY_KEEP_MS) {
         if (!ignoreId || stickyBatchRef.current.id !== ignoreId) return stickyBatchRef.current.id;
       }
@@ -364,7 +370,7 @@ export default function IndexPage() {
 
         if (p && p.done === true) {
           if (armedBatchConfettiRef.current) { fireBatchCompleted(); armedBatchConfettiRef.current = false; }
-          ignoreBatchRef.current = { id: String(chosen), until: Date.now() + 600 };
+          ignoreBatchRef.current = { id: String(chosen), until: Date.now() + IGNORE_AFTER_DONE_MS };
           stickyBatchRef.current = null;
           idAbsentSinceRef.current = Date.now();
           switchToEmpty();
@@ -523,7 +529,7 @@ const S: Record<string, React.CSSProperties> = {
 
   right: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, paddingRight: 18, justifySelf: 'end' },
 
-  counterCard: { background: '#f8fafc', border: '1px solid #e5e7eb', borderRadius: 16, padding: '12px 18px', minWidth: 200, textAlign: 'center', boxShadow: 'inset 0 -1px 0 rgba(0,0,0,0.03)' },
+  counterCard: { background: '#f8fafc', border: "1px solid #e5e7eb", borderRadius: 16, padding: '12px 18px', minWidth: 200, textAlign: 'center', boxShadow: 'inset 0 -1px 0 rgba(0,0,0,0.03)' },
   counterTop: { display: 'flex', alignItems: 'baseline', gap: 10, justifyContent: 'center' },
   counterDone: { fontSize: 56, fontWeight: 900, color: '#111827' },
   counterSlash: { color: '#9ca3af', fontSize: 28, fontWeight: 800 },
