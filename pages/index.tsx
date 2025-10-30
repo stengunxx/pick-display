@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { zoneColor, zoneOf } from '../lib/picqer';
 
-/* ===== kleine confetti ===== */
+/* ========= Confetti ========= */
 function ConfettiBurst({ count = 60 }: { count?: number }) {
   const pieces = React.useMemo(() =>
     Array.from({ length: count }).map((_, i) => {
@@ -46,25 +46,25 @@ function ConfettiBurst({ count = 60 }: { count?: number }) {
   );
 }
 
-/* ===== timers & drempels ===== */
-const BASE_POLL_MS = 260;
-const BURST_POLL_MS = 90;
-const BURST_WINDOW_MS = 2000;
-const TIMEOUT_MS = 2600;
+/* ========= Timers / tuning ========= */
+const BASE_POLL_MS      = 120;
+const BURST_POLL_MS     = 35;
+const BURST_WINDOW_MS   = 3800;
+const TIMEOUT_MS        = 2200;
 
-const NEW_BANNER_MS = 1600;
+const NEW_BANNER_MS        = 1600;
 const PICKLIST_CONFETTI_MS = 900;
-const BATCH_CONFETTI_MS = 1400;
+const BATCH_CONFETTI_MS    = 1400;
 
-/** Kort negeren na voltooien; unvoltooien moet snel */
 const IGNORE_AFTER_DONE_MS = 1200;
 
-/** Stabiliteit tegen flip-flops */
-const STICKY_MS = 8000;          // minimaal vast aan gekozen batch
-const ERROR_TOL = 8;             // opeenvolgende 502/pending/lege responsen
-const DONE_CONFIRM = 2;          // done:true moet 2x achter elkaar
+/* Stabiliteit / drempels */
+const STICKY_MS      = 6000;
+const ERROR_TOL      = 8;
+/** Twee bevestigingen voor ‘done’ via lokale detector om één-tick ruis te negeren */
+const LOCAL_DONE_CONFIRMS = 2;
 
-/* ===== helpers ===== */
+/* ========= helpers ========= */
 const collator = new Intl.Collator('nl', { numeric: true, sensitivity: 'base' });
 const locOf = (it: any) => (it?.stocklocation ?? it?.stock_location ?? '').toString();
 const pickedOf = (it: any) => Number(it?.amountpicked ?? it?.amount_picked ?? 0);
@@ -83,6 +83,7 @@ async function fetchJson(url: string, timeoutMs: number) {
         Expires: '0',
       },
       signal: ctrl.signal,
+      keepalive: true,
     });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const txt = await res.text();
@@ -92,7 +93,7 @@ async function fetchJson(url: string, timeoutMs: number) {
   }
 }
 
-/* ===== pagina ===== */
+/* ========= Page ========= */
 type Phase = 'ACTIVE' | 'LOADING' | 'EMPTY';
 
 export default function IndexPage() {
@@ -103,37 +104,44 @@ export default function IndexPage() {
   const [confettiCount, setConfettiCount] = useState<number | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
 
-  const burstUntilRef = useRef(0);
   const loopRef = useRef<any>(null);
+  const burstUntilRef = useRef(0);
 
   const stickyBatchRef = useRef<{ id: string; stickUntil: number } | null>(null);
   const ignoreBatchRef = useRef<{ id: string; until: number } | null>(null);
 
   const errorStreakRef = useRef(0);
-  const doneStreakRef = useRef(0);
   const lastPicklistIdRef = useRef<string>('');
   const lastTodoRef = useRef<number>(-1);
 
-  const openItems = useMemo(() => items.filter((it: any) => remOf(it) > 0), [items]);
+  // lokale ‘done’-detector: een paar opeenvolgende keren 0 remaining of leeg antwoord
+  const localDoneStreakRef = useRef(0);
+  // om de "volgende batch" alleen te tonen als we echt geen actieve meer hebben
+  const noBatchStreakRef = useRef(0);
+
+  const openItems = useMemo(() => items.filter((it) => remOf(it) > 0), [items]);
   const topRows = useMemo(() => openItems.slice(0, 3), [openItems]);
 
-  const total = items.reduce((s, it) => s + totalOf(it), 0);
-  const done  = items.reduce((s, it) => s + pickedOf(it), 0);
+  const total = phase === 'ACTIVE' ? items.reduce((s, it) => s + totalOf(it), 0) : 0;
+  const done  = phase === 'ACTIVE' ? items.reduce((s, it) => s + pickedOf(it), 0) : 0;
   const todo  = Math.max(0, total - done);
   const progress = total > 0 ? Math.round((done / total) * 100) : 0;
 
   const bustQ = () => `_=${Date.now()}&t=${performance.now().toFixed(3)}`;
   const showBanner = (t: string) => { setBanner(t); setTimeout(() => setBanner(null), NEW_BANNER_MS); };
   const burst = (ms = BURST_WINDOW_MS) => { burstUntilRef.current = Math.max(burstUntilRef.current, performance.now() + ms); };
+
   const firePicklistCompleted = () => { setConfettiCount(90); showBanner('Picklijst voltooid'); setTimeout(() => setConfettiCount(null), PICKLIST_CONFETTI_MS); burst(1600); };
   const fireBatchCompleted   = () => { setConfettiCount(140); showBanner('Batch voltooid'); setTimeout(() => setConfettiCount(null), BATCH_CONFETTI_MS); burst(2000); };
 
-  /* === API helpers === */
+  const clearUI = () => { setItems([]); setPicklistId('—'); setCreator(null); };
+
+  /* ===== API helpers ===== */
   const getOpenBatchIds = async (): Promise<string[]> => {
     const nb = await fetchJson(`/api/next-batch?${bustQ()}`, TIMEOUT_MS).catch(() => null);
     return Array.isArray(nb?.batchIds)
       ? nb.batchIds.map(String)
-      : (nb?.batchId ? [String(nb.batchId)] : []);
+      : (nb?.batchId ? [String(nb?.batchId)] : []);
   };
 
   const loadBatch = async (id: string): Promise<boolean> => {
@@ -145,16 +153,15 @@ export default function IndexPage() {
     const sorted = arr.slice().sort((a, b) => collator.compare(locOf(a), locOf(b)));
 
     stickyBatchRef.current = { id, stickUntil: Date.now() + STICKY_MS };
-    ignoreBatchRef.current = null;            // als we expliciet kiezen, niet blokkeren
+    ignoreBatchRef.current = null;
     errorStreakRef.current = 0;
-    doneStreakRef.current = 0;
+    localDoneStreakRef.current = 0;
 
     setPicklistId(id);
     setCreator(p?.creator || null);
     setItems(sorted);
     setPhase('ACTIVE');
 
-    // picklist-meldingen (stabilized: alleen bij ECHTE overgang)
     const dbgPick = String(p?.debug?.picklistId ?? '');
     const todoNow = sorted.reduce((s, it) => s + remOf(it), 0);
     if (dbgPick) {
@@ -162,7 +169,7 @@ export default function IndexPage() {
         showBanner('Nieuwe picklijst');
         setConfettiCount(60);
         setTimeout(() => setConfettiCount(null), PICKLIST_CONFETTI_MS);
-        burst();
+        burst(2600);
         lastTodoRef.current = -1;
       }
       if (lastPicklistIdRef.current === dbgPick || !lastPicklistIdRef.current) {
@@ -178,7 +185,6 @@ export default function IndexPage() {
     const ids = await getOpenBatchIds();
     if (!ids.length) return false;
 
-    // sla een id over als hij nog heel kort op ignore staat
     const ign = ignoreBatchRef.current;
     for (const id of ids) {
       const ignored = ign && Date.now() < ign.until && ign.id === id;
@@ -186,23 +192,61 @@ export default function IndexPage() {
       const ok = await loadBatch(id);
       if (ok) return true;
     }
-    // als alles “ignored”, probeer de eerste toch
-    if (ign && ids[0] === ign.id) {
+    // alleen als ignore verlopen is, mag dezelfde batch terugkomen
+    if (ign && Date.now() >= ign.until && ids[0] === ign.id) {
       const ok = await loadBatch(ids[0]);
       if (ok) return true;
     }
     return false;
   };
 
-  /* === main loop === */
+  const confirmTrulyEmpty = async (): Promise<boolean> => {
+    const ids = await getOpenBatchIds();
+    if (ids.length === 0) noBatchStreakRef.current += 1;
+    else noBatchStreakRef.current = 0;
+    return noBatchStreakRef.current >= 2; // twee keer geen batches → echt leeg
+  };
+
+  /* ===== main loop ===== */
   useEffect(() => {
     let stop = false;
 
-    const schedule = () => {
+    const schedule = (ms?: number) => {
       if (stop) return;
       const fast = performance.now() < burstUntilRef.current;
-      const ms = fast ? BURST_POLL_MS : BASE_POLL_MS;
-      loopRef.current = setTimeout(tick, ms);
+      const delay = typeof ms === 'number' ? ms : (fast ? BURST_POLL_MS : BASE_POLL_MS);
+      loopRef.current = setTimeout(tick, delay);
+    };
+
+    const instantRefetch = async (batchId: string) => {
+      const p = await fetchJson(`/api/next-pick?batchId=${batchId}&${bustQ()}`, TIMEOUT_MS).catch(() => null);
+      if (p && !p.pending && !p.done && Array.isArray(p.items) && p.items.length) {
+        const sorted = p.items.slice().sort((a: any, b: any) => collator.compare(locOf(a), locOf(b)));
+        setItems(sorted);
+      }
+    };
+
+    /** NIEUW: hard clear + direct switch */
+    const completeAndSwitch = async (finishedBatchId: string) => {
+      fireBatchCompleted();
+      // blokkeer even dezelfde batch
+      ignoreBatchRef.current = { id: finishedBatchId, until: Date.now() + IGNORE_AFTER_DONE_MS };
+      stickyBatchRef.current = null;
+
+      // UI meteen leeg en naar LOADING, zodat hij niet blijft “plakken”
+      clearUI();
+      setPhase('LOADING');
+
+      // pak direct de volgende (zo niet, check of het echt leeg is)
+      const ok = await chooseFirstOpen();
+      if (ok) {
+        setPhase('ACTIVE');
+      } else if (await confirmTrulyEmpty()) {
+        clearUI();
+        setPhase('EMPTY');
+      } else {
+        // geen batch gevonden maar mogelijk onderweg → blijf op LOADING
+      }
     };
 
     const tick = async () => {
@@ -211,93 +255,106 @@ export default function IndexPage() {
       const sticky = stickyBatchRef.current;
       const chosen = sticky?.id ?? null;
 
-      // nog niets gekozen → kies de eerste open en pin hem even
       if (!chosen) {
         const ok = await chooseFirstOpen();
-        setPhase(ok ? 'ACTIVE' : 'EMPTY');
-        return schedule();
+        if (ok) setPhase('ACTIVE');
+        else if (await confirmTrulyEmpty()) { clearUI(); setPhase('EMPTY'); }
+        return schedule(0);
       }
 
-      // we hebben een sticky batch; vraag de items op
       const p = await fetchJson(`/api/next-pick?batchId=${chosen}&${bustQ()}`, TIMEOUT_MS).catch(() => null);
 
-      // fouten / pending → geen switches zolang sticky-tijd loopt
       if (!p || p.pending) {
         errorStreakRef.current += 1;
         if (Date.now() > (sticky?.stickUntil ?? 0) && errorStreakRef.current >= ERROR_TOL) {
-          // sticky verlopen + veel fouten → kies opnieuw
           const ok = await chooseFirstOpen();
-          if (!ok) setPhase('EMPTY');
+          if (ok) setPhase('ACTIVE');
+          else if (await confirmTrulyEmpty()) { clearUI(); setPhase('EMPTY'); }
         }
         return schedule();
       }
 
-      // valide respons vanaf hier → reset errorStreak
       errorStreakRef.current = 0;
 
+      // ======= Sterke ‘done’ detectie =======
       if (p.done === true) {
-        doneStreakRef.current += 1;
-        // alleen wegschakelen als done bevestigd is EN sticky verlopen
-        if (doneStreakRef.current >= DONE_CONFIRM && Date.now() > (sticky?.stickUntil ?? 0)) {
-          fireBatchCompleted();
-          ignoreBatchRef.current = { id: chosen, until: Date.now() + IGNORE_AFTER_DONE_MS };
-          stickyBatchRef.current = null;
-          const ok = await chooseFirstOpen();
-          setPhase(ok ? 'ACTIVE' : 'EMPTY');
-        }
-        return schedule();
-      } else {
-        doneStreakRef.current = 0;
+        await completeAndSwitch(chosen);
+        return schedule(0);
       }
 
       const arr: any[] = Array.isArray(p.items) ? p.items : [];
+
+      // lokale heuristiek: lege items of alles gepickt ⇒ done-streak ophogen
+      if (arr.length === 0) {
+        localDoneStreakRef.current += 1;
+      } else {
+        const todoNowLocal = arr.reduce((s, it) => s + remOf(it), 0);
+        if (todoNowLocal === 0) localDoneStreakRef.current += 1;
+        else localDoneStreakRef.current = 0;
+      }
+
+      if (localDoneStreakRef.current >= LOCAL_DONE_CONFIRMS) {
+        await completeAndSwitch(chosen);
+        return schedule(0);
+      }
+      // ======= /done detectie =======
+
       if (!arr.length) {
-        // geen items, maar niet done → blijf sticky; na sticky-periode mag herkiezen
+        // niets nieuws, blijf tonen en check of we kunnen handoveren
         if (Date.now() > (sticky?.stickUntil ?? 0)) {
           const ok = await chooseFirstOpen();
-          if (!ok) setPhase('EMPTY');
+          if (ok) setPhase('ACTIVE');
+          else if (await confirmTrulyEmpty()) { clearUI(); setPhase('EMPTY'); }
         }
         return schedule();
       }
 
-      // update items
       const sorted = arr.slice().sort((a: any, b: any) => collator.compare(locOf(a), locOf(b)));
+      const todoNow = sorted.reduce((s, it) => s + Math.max(0, totalOf(it) - pickedOf(it)), 0);
+
+      // vooruitgang? → instant extra fetch
+      const progressed = lastTodoRef.current >= 0 && todoNow < lastTodoRef.current;
+      if (progressed) {
+        burst(3800);
+        setItems(sorted);
+        setPicklistId(String(chosen));
+        setCreator(p?.creator || null);
+        if (phase !== 'ACTIVE') setPhase('ACTIVE');
+        await instantRefetch(chosen);
+        lastTodoRef.current = todoNow;
+        return schedule(0);
+      }
+
+      // normale update
       setItems(sorted);
       setPicklistId(String(chosen));
       setCreator(p?.creator || null);
       if (phase !== 'ACTIVE') setPhase('ACTIVE');
+      lastTodoRef.current = todoNow;
 
-      // picklist-meldingen (stabiel)
-      const dbgPick = String(p?.debug?.picklistId ?? '');
-      const todoNow = sorted.reduce((s, it) => s + remOf(it), 0);
-      if (dbgPick) {
-        if (lastPicklistIdRef.current && lastPicklistIdRef.current !== dbgPick) {
-          showBanner('Nieuwe picklijst');
-          setConfettiCount(60);
-          setTimeout(() => setConfettiCount(null), PICKLIST_CONFETTI_MS);
-          burst();
-          lastTodoRef.current = -1;
-        }
-        if (lastPicklistIdRef.current === dbgPick || !lastPicklistIdRef.current) {
-          if (lastTodoRef.current > 0 && todoNow === 0) firePicklistCompleted();
-          lastTodoRef.current = todoNow;
-        }
-        lastPicklistIdRef.current = dbgPick;
-      }
-
-      // na sticky-periode mag er gewisseld worden als “eerste open” anders is (maar pas als we niet bezig zijn)
+      // optionele handover als sticky is verlopen en er een eerdere batch open staat
       if (Date.now() > (sticky?.stickUntil ?? 0)) {
         const ids = await getOpenBatchIds();
         if (ids.length && ids[0] !== chosen) {
-          await loadBatch(ids[0]); // poging; lukt alleen bij geldige items
+          const ok = await loadBatch(ids[0]);
+          if (ok) setPhase('ACTIVE');
         }
       }
-
-      return schedule();
+      return schedule(0);
     };
 
+    const onFocus = () => burst(3800);
+    const onVis = () => { if (document.visibilityState === 'visible') burst(3800); };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onVis);
+
     tick();
-    return () => { stop = true; clearTimeout(loopRef.current); };
+    return () => {
+      stop = true;
+      clearTimeout(loopRef.current);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onVis);
+    };
   }, []); // mount once
 
   /* ===== klok ===== */
@@ -310,10 +367,10 @@ export default function IndexPage() {
 
   // NextUpBar
   const [nextLocs, setNextLocs] = useState<string[]>([]);
-  useEffect(() => setNextLocs([...new Set(openItems.map(locOf).filter(Boolean))]), [openItems]);
+  useEffect(() => setNextLocs(phase === 'ACTIVE' ? [...new Set(openItems.map(locOf).filter(Boolean))] : []), [openItems, phase]);
 
   function NextUpBar() {
-    if (!nextLocs.length) return null;
+    if (phase !== 'ACTIVE' || !nextLocs.length) return null;
     return (
       <div
         style={{
@@ -367,11 +424,13 @@ export default function IndexPage() {
 
       <NextUpBar/>
 
-      <span style={{
-        background:'#0f172a', color:'#fff', borderRadius:999, padding:'6px 12px',
-        fontWeight:900, letterSpacing:.3,
-        position:'fixed', top:18, right:24, zIndex:40
-      }}>Nog: {todo}</span>
+      {phase === 'ACTIVE' && (
+        <span style={{
+          background:'#0f172a', color:'#fff', borderRadius:999, padding:'6px 12px',
+          fontWeight:900, letterSpacing:.3,
+          position:'fixed', top:18, right:24, zIndex:40
+        }}>Nog: {todo}</span>
+      )}
 
       <main style={S.main}>
         {phase === 'EMPTY' ? (
@@ -391,7 +450,7 @@ export default function IndexPage() {
   );
 }
 
-/* ===== componenten ===== */
+/* ========= onderdelen ========= */
 function ProductImage({ item, size = 200 }: { item: any; size?: number }) {
   const url = item?.imageUrl || item?.image_url || item?.image || '';
   return (
@@ -406,7 +465,6 @@ function ProductImage({ item, size = 200 }: { item: any; size?: number }) {
   );
 }
 
-/** Linker verticale vulbalk: blauw → groen, groeit bottom-up */
 function LeftProgressStrip({ ratio }: { ratio: number }) {
   const r = Math.max(0, Math.min(1, ratio));
   return (
@@ -479,7 +537,7 @@ function BigRow({ it }: { it: any }) {
   );
 }
 
-/* ===== styles ===== */
+/* ========= styles ========= */
 const S: Record<string, React.CSSProperties> = {
   page: { minHeight: '100vh', background: '#fff', color: '#0f172a', fontFamily: 'Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif' },
 
