@@ -357,14 +357,6 @@ export default function IndexPage() {
     };
   }, []); // mount once
 
-  /* ===== klok ===== */
-  const [now, setNow] = useState('');
-  useEffect(() => {
-    const t = setInterval(() =>
-      setNow(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })), 1000);
-    return () => clearInterval(t);
-  }, []);
-
   // NextUpBar
   const [nextLocs, setNextLocs] = useState<string[]>([]);
   useEffect(() => setNextLocs(phase === 'ACTIVE' ? [...new Set(openItems.map(locOf).filter(Boolean))] : []), [openItems, phase]);
@@ -376,7 +368,7 @@ export default function IndexPage() {
         style={{
           display: 'flex', alignItems: 'center', gap: 12,
           padding: '10px 16px', borderRadius: 14, border: '1px solid #e5e7eb',
-          background: '#f8fafc', margin: '8px 24px 0', overflowX: 'auto', scrollbarWidth: 'thin',
+          background: '#f8fafc', margin: '8px 24px 4px', overflowX: 'auto', scrollbarWidth: 'thin',
         }}
       >
         <span style={{fontWeight:900, fontSize:14, letterSpacing:.4, color:'#0f172a', flexShrink:0}}>VOLGENDE</span>
@@ -400,6 +392,14 @@ export default function IndexPage() {
     );
   }
 
+  // Voeg klok-state en effect weer toe
+  const [now, setNow] = useState('');
+  useEffect(() => {
+    const t = setInterval(() =>
+      setNow(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })), 1000);
+    return () => clearInterval(t);
+  }, []);
+
   return (
     <div style={S.page}>
       {confettiCount != null && <ConfettiBurst count={confettiCount} />}
@@ -411,10 +411,14 @@ export default function IndexPage() {
           <span style={S.badge}>Picklist #{picklistId}</span>
           {creator && <span style={S.badgeMuted}>Door {creator}</span>}
         </div>
-        <div style={{ display:'flex', gap:18, alignItems:'center' }}>
+        <div style={{ display:'flex', gap:18, alignItems:'center', whiteSpace:'nowrap' }}>
           <span style={S.meta}>Voortgang: <b>{progress}%</b></span>
+          <span style={{ opacity:.35 }}>•</span>
           <span style={S.meta}>Totaal: <b>{total}</b></span>
-          <span style={S.clock}>{now}</span>
+          <span style={{ opacity:.35 }}>•</span>
+          <span style={S.meta}>Nog: <b>{todo}</b></span>
+          <span style={{ opacity:.35 }}>•</span>
+          <span style={{ fontVariantNumeric:'tabular-nums', color:'#475569', fontSize:16, fontWeight:900, background:'#fff', borderRadius:999, padding:'6px 14px', boxShadow:'0 1px 6px rgba(0,0,0,.04)' }}>{now}</span>
         </div>
       </header>
 
@@ -423,14 +427,6 @@ export default function IndexPage() {
       </div>
 
       <NextUpBar/>
-
-      {phase === 'ACTIVE' && (
-        <span style={{
-          background:'#0f172a', color:'#fff', borderRadius:999, padding:'6px 12px',
-          fontWeight:900, letterSpacing:.3,
-          position:'fixed', top:18, right:24, zIndex:40
-        }}>Nog: {todo}</span>
-      )}
 
       <main style={S.main}>
         {phase === 'EMPTY' ? (
@@ -539,21 +535,25 @@ function BigRow({ it }: { it: any }) {
 
 /* ========= styles ========= */
 const S: Record<string, React.CSSProperties> = {
-  page: { minHeight: '100vh', background: '#fff', color: '#0f172a', fontFamily: 'Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif' },
+  page: { height:'100vh', display:'flex', flexDirection:'column', background:'#fff', color:'#0f172a', fontFamily:'Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif', overflow:'hidden' },
 
   header: { position: 'sticky', top: 0, zIndex: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '18px 28px', background: '#fff', borderBottom: '1px solid #eee' },
   brand: { fontWeight: 800, fontSize: 24 },
   badge: { background: '#1f6feb', color: '#fff', borderRadius: 999, padding: '7px 12px', fontSize: 14, fontWeight: 800 },
   badgeMuted: { background: '#eef2ff', color: '#334155', borderRadius: 999, padding: '7px 12px', fontSize: 14, fontWeight: 800 },
   meta: { fontSize: 16, color: '#334155' },
-  clock: { fontVariantNumeric: 'tabular-nums', color: '#475569', fontSize: 16 },
 
   progressWrapHeader: { height: 8, background: '#f3f4f6', overflow: 'hidden' },
-  progressFillHeader: { height: '100%', background: '#10b981', transition: 'width .65s cubic-bezier(.25,.9,.25,1)', willChange: 'width' },
+  progressFillHeader: {
+    height: '100%',
+    background: 'linear-gradient(90deg, #3b82f6 0%, #10b981 100%)',
+    transition: 'width .65s cubic-bezier(.25,.9,.25,1)',
+    willChange: 'width'
+  },
 
-  main: { width: '100%', padding: '22px 24px 28px', minHeight: 'calc(100vh - 110px)' },
+  main: { width:'100%', padding:'22px 24px 16px', flex:1, display:'flex', flexDirection:'column', overflow:'hidden' },
 
-  rows: { display: 'grid', gridTemplateRows: 'repeat(3, minmax(0, 1fr))', gap: 18 },
+  rows: { display:'grid', gridTemplateRows:'repeat(3, minmax(0, 1fr))', gap:18, height:'100%' },
 
   row: { display: 'grid', gridTemplateColumns: '220px 1fr 1px 240px', alignItems: 'center', columnGap: 28, padding: '26px 32px', borderRadius: 26, background: '#fff', overflow: 'hidden', boxShadow: '0 4px 20px rgba(2, 6, 23, 0.04)' },
 
@@ -561,10 +561,10 @@ const S: Record<string, React.CSSProperties> = {
 
   mid: { minWidth: 0 },
   locWrap: { display: 'flex', alignItems: 'center', gap: 18, marginBottom: 10, flexWrap: 'wrap' },
-  zoneMega: { padding: '10px 16px', borderRadius: 999, fontWeight: 900, fontSize: 26, color: '#0f172a', boxShadow: 'inset 0 0 0 1px rgba(15,23,42,.08)' },
-  locMegaLine: { display: 'flex', alignItems: 'center', gap: 16, fontSize: 40, fontWeight: 900, letterSpacing: .5, color: '#0f172a', flexWrap: 'wrap' },
+  zoneMega: { padding: '12px 18px', borderRadius: 999, fontWeight: 900, fontSize: 32, color: '#0f172a', boxShadow: 'inset 0 0 0 1px rgba(15,23,42,.08)' },
+  locMegaLine: { display: 'flex', alignItems: 'center', gap: 18, fontSize: 56, fontWeight: 900, letterSpacing: .6, color: '#0f172a', flexWrap: 'wrap' },
   locMegaSeg: { display: 'inline-flex', alignItems: 'center' },
-  locMegaDot: { margin: '0 12px', color: '#cbd5e1', fontSize: 32 },
+  locMegaDot: { margin: '0 14px', color: '#cbd5e1', fontSize: 48 },
 
   title: { fontWeight: 800, fontSize: 24, color: '#111827', marginTop: 4, marginBottom: 6, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
 
@@ -576,14 +576,14 @@ const S: Record<string, React.CSSProperties> = {
 
   right: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, paddingRight: 18, justifySelf: 'end' },
 
-  counterCard: { background: '#f8fafc', border: "1px solid #e5e7eb", borderRadius: 16, padding: '12px 18px', minWidth: 200, textAlign: 'center', boxShadow: 'inset 0 -1px 0 rgba(0,0,0,0.03)' },
+  counterCard: { background:'#f8fafc', border:'1px solid #e5e7eb', borderRadius:18, padding:'14px 20px', minWidth: 240, textAlign:'center', boxShadow:'inset 0 -1px 0 rgba(0,0,0,.03)' },
   counterTop: { display: 'flex', alignItems: 'baseline', gap: 10, justifyContent: 'center' },
-  counterDone: { fontSize: 42, fontWeight: 900, color: '#111827' },
-  counterSlash: { color: '#9ca3af', fontSize: 28, fontWeight: 800 },
-  counterTot: { fontSize: 36, fontWeight: 900, color: '#334155' },
-  counterLbl: { marginTop: 4, fontSize: 11, fontWeight: 800, letterSpacing: 0.6, color: '#64748b' },
+  counterDone: { fontSize: 64, fontWeight: 900, color:'#111827' },
+  counterSlash: { color:'#9ca3af', fontSize: 34, fontWeight: 800 },
+  counterTot: { fontSize: 52, fontWeight: 900, color:'#334155' },
+  counterLbl: { marginTop:6, fontSize: 12, fontWeight: 800, letterSpacing:.7, color:'#64748b' },
 
-  progressOuter: { width: 240, height: 10, background: '#eef2f7', borderRadius: 10, overflow: 'hidden', border: '1px solid #e5e7eb', alignSelf: 'center', marginRight: 12 },
+  progressOuter: { width: 260, height: 12, background:'#eef2f7', borderRadius: 10, overflow:'hidden', border:'1px solid #e5e7eb', alignSelf:'center', marginRight:12 },
   progressFillGreen: { height: '100%', background: '#10b981', transition: 'width .65s cubic-bezier(.25,.9,.25,1)', willChange: 'width' },
 
   empty: { display: 'grid', placeItems: 'center', height: 'calc(100vh - 160px)', textAlign: 'center', color: '#6b7280', fontSize: 24 },
