@@ -5,6 +5,30 @@ import { authOptions } from "./auth/[...nextauth]";
 
 const OPEN_STATUSES = ["open", "processing", "inprogress", "active", "started"];
 
+interface PicqerBatchAssignedTo {
+  full_name?: string;
+  username?: string;
+  iduser?: string | number;
+}
+
+interface PicqerBatch {
+  id?: number;
+  idpicklist_batch?: number;
+  status?: string;
+  created_at?: string;
+  created?: string;
+  assigned_to?: PicqerBatchAssignedTo | null;
+  created_by_name?: string;
+  created_by?: string;
+  user_name?: string;
+  user?: string;
+  progress?: number | null;
+  // andere velden laten we open
+  [key: string]: unknown;
+}
+
+type AttemptsEntry = Record<string, unknown>;
+
 function withTimeout<T>(p: Promise<T>, ms: number, label = "fetch"): Promise<T> {
   return new Promise((resolve, reject) => {
     const id = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
@@ -19,6 +43,19 @@ function withTimeout<T>(p: Promise<T>, ms: number, label = "fetch"): Promise<T> 
       }
     );
   });
+}
+
+function extractBatches(json: unknown): PicqerBatch[] | null {
+  if (Array.isArray(json)) {
+    return json as PicqerBatch[];
+  }
+  if (json && typeof json === "object") {
+    const obj = json as { data?: unknown };
+    if (Array.isArray(obj.data)) {
+      return obj.data as PicqerBatch[];
+    }
+  }
+  return null;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -36,11 +73,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({
       step: "env-missing",
       batchId: null,
-      batchIds: [],
-      batches: [],
+      batchIds: [] as number[],
+      batches: [] as unknown[],
       error: "PICQER_API_URL of PICQER_API_KEY ontbreekt/leeg",
       PICQER_API_URL: baseRaw,
-      PICQER_API_KEY_set: !!key,
+      PICQER_API_KEY_set: Boolean(key),
       hint: "PICQER_API_URL moet lijken op https://<tenant>.picqer.com/api/v1 (zonder trailing slash)",
     });
   }
@@ -51,31 +88,41 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     "Content-Type": "application/json",
   };
 
-  const attempts: any[] = [];
+  const attempts: AttemptsEntry[] = [];
 
   try {
     // 1) Haal batches op (altijd 200 teruggeven)
     const url = base + "/picklists/batches";
-    let batches: any[] | null = null;
+    let batches: PicqerBatch[] | null = null;
 
     try {
       const r = (await withTimeout(fetch(url, { headers }), 1200, "GET " + url)) as Response;
       const txt = await r.text();
-      let json: any = null;
+      let json: unknown = null;
       try {
         json = txt ? JSON.parse(txt) : null;
       } catch (e) {
         attempts.push({ url, status: r.status, parseError: String(e), body: txt.slice(0, 300) });
       }
 
-      if (Array.isArray(json)) {
-        batches = json;
-        attempts.push({ url, ok: true, length: json.length, shape: "array" });
-      } else if (json && Array.isArray(json.data)) {
-        batches = json.data;
-        attempts.push({ url, ok: true, length: json.data.length, shape: "data[]" });
+      const extracted = extractBatches(json);
+      if (extracted) {
+        batches = extracted;
+        attempts.push({
+          url,
+          ok: true,
+          length: extracted.length,
+          shape: Array.isArray(json) ? "array" : "data[]",
+        });
       } else {
-        attempts.push({ url, status: r.status, note: "unexpected shape", keys: Object.keys(json || {}) });
+        const jsonObj =
+          json && typeof json === "object" ? (json as Record<string, unknown>) : ({} as Record<string, unknown>);
+        attempts.push({
+          url,
+          status: r.status,
+          note: "unexpected shape",
+          keys: Object.keys(jsonObj),
+        });
       }
     } catch (e) {
       attempts.push({ url, error: String(e) });
@@ -86,8 +133,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({
         step: "no-batches",
         batchId: null,
-        batchIds: [],
-        batches: [],
+        batchIds: [] as number[],
+        batches: [] as PicqerBatch[],
         error: "Kon geen lijst met batches ophalen van Picqer",
         attempts,
         hint: "Controleer API-toegang of netwerk",
@@ -95,8 +142,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Filter op open statussen
-    const open = (batches as any[]).filter(
-      (b: any) => OPEN_STATUSES.indexOf(String((b && b.status) || "").toLowerCase()) !== -1
+    const open = batches.filter(
+      (b) => OPEN_STATUSES.indexOf(String((b && b.status) || "").toLowerCase()) !== -1
     );
 
     // *** Belangrijk: ALTIJD 200 teruggeven, ook bij 'geen open batches' ***
@@ -104,37 +151,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({
         step: "filter-open",
         batchId: null,
-        batchIds: [],
-        batches: [],
+        batchIds: [] as number[],
+        batches: [] as PicqerBatch[],
         ok: true,
         attempts,
       });
     }
 
     // Sorteer oudste eerst (creatiedatum, dan id)
-    open.sort(function (a, b) {
-      const ta = Date.parse(a.created_at || a.created || "") || 0;
-      const tb = Date.parse(b.created_at || b.created || "") || 0;
+    open.sort((a, b) => {
+      const ta = Date.parse((a.created_at || a.created || "") ?? "") || 0;
+      const tb = Date.parse((b.created_at || b.created || "") ?? "") || 0;
       if (ta !== tb) return ta - tb;
-      const ia = Number(a.id || a.idpicklist_batch || Number.MAX_SAFE_INTEGER);
-      const ib = Number(b.id || b.idpicklist_batch || Number.MAX_SAFE_INTEGER);
+      const ia = Number(a.id ?? a.idpicklist_batch ?? Number.MAX_SAFE_INTEGER);
+      const ib = Number(b.id ?? b.idpicklist_batch ?? Number.MAX_SAFE_INTEGER);
       return ia - ib;
     });
 
     const top = open.slice(0, 2);
+
     const batchMeta = top
       .map((batch) => {
-        let creator = null as string | null;
+        let creator: string | null = null;
         if (batch.assigned_to && typeof batch.assigned_to === "object") {
-          creator = batch.assigned_to.full_name || batch.assigned_to.username || batch.assigned_to.iduser || null;
+          creator =
+            batch.assigned_to.full_name ??
+            batch.assigned_to.username ??
+            (batch.assigned_to.iduser != null ? String(batch.assigned_to.iduser) : null);
         } else {
-          creator = batch.created_by_name || batch.created_by || batch.user_name || batch.user || null;
+          creator = batch.created_by_name ?? batch.created_by ?? batch.user_name ?? batch.user ?? null;
         }
+        const batchId = Number(batch.id ?? batch.idpicklist_batch);
         return {
-          batchId: Number(batch.id || batch.idpicklist_batch),
+          batchId,
           createdBy: creator,
-          status: batch.status,
-          progress: batch.progress || null,
+          status: batch.status ?? null,
+          progress: batch.progress ?? null,
         };
       })
       .filter((b) => Number.isFinite(b.batchId));
@@ -143,8 +195,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({
         step: "ok-empty",
         batchId: null,
-        batchIds: [],
-        batches: [],
+        batchIds: [] as number[],
+        batches: [] as PicqerBatch[],
         first: open[0],
         attempts,
       });
@@ -157,14 +209,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       batches: batchMeta,
       debug: { chosen_statuses: batchMeta.map((b) => b.status), attempts },
     });
-  } catch (err) {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
     // Ook bij fouten: 200 + lege set teruggeven
     return res.status(200).json({
       step: "fatal",
       batchId: null,
-      batchIds: [],
-      batches: [],
-      error: (err && (err as any).message) || String(err),
+      batchIds: [] as number[],
+      batches: [] as PicqerBatch[],
+      error: message,
       attempts,
     });
   }
