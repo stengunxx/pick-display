@@ -1,8 +1,6 @@
 // pages/api/next-pick.ts
 import { getProductImageUrlByCode } from "../../lib/picqer";
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "./auth/[...nextauth]";
 
 interface PicqerProduct {
   idpicklist_product?: number | string;
@@ -75,7 +73,7 @@ async function fetchWithTimeout(
   timeout = 1500
 ): Promise<Response> {
   const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeout); // snellere timeout
+  const id = setTimeout(() => controller.abort(), timeout);
   try {
     return await fetch(resource, { ...options, signal: controller.signal });
   } finally {
@@ -89,7 +87,7 @@ const amtTotal = (it: PicqerProduct): number =>
 const amtPicked = (it: PicqerProduct): number =>
   Number(it.amountpicked ?? it.amount_picked ?? 0);
 
-// ❗ Belangrijke fix: maak "heeft werk" puur kwantitatief; negeer de `picked`-flag
+// "heeft werk" puur op basis van hoeveelheid
 const hasWork = (it: PicqerProduct): boolean => amtPicked(it) < amtTotal(it);
 
 // Statusen die NIET echt klaar zijn
@@ -108,8 +106,7 @@ function isProductsArray(value: unknown): value is PicqerProduct[] {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const session = await getServerSession(req, res, authOptions);
-  if (!session) return res.status(401).json({ error: "Unauthorized" });
+  // ⚠️ Auth tijdelijk uitgezet zodat productie werkt zonder login
 
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
 

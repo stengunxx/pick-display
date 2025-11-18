@@ -1,7 +1,5 @@
 // pages/api/next-batch.ts
 import type { NextApiRequest, NextApiResponse } from "next";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "./auth/[...nextauth]";
 
 const OPEN_STATUSES = ["open", "processing", "inprogress", "active", "started"];
 
@@ -23,7 +21,6 @@ interface PicqerBatch {
   user_name?: string;
   user?: string;
   progress?: number | null;
-  // andere velden laten we open
   [key: string]: unknown;
 }
 
@@ -59,8 +56,7 @@ function extractBatches(json: unknown): PicqerBatch[] | null {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const session = await getServerSession(req, res, authOptions);
-  if (!session) return res.status(401).json({ error: "Unauthorized" });
+  // ⚠️ Auth tijdelijk uitgezet zodat productie werkt zonder login
 
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
 
